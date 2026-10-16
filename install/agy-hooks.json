@@ -1,0 +1,23 @@
+{
+  "SessionStart": [
+    {
+      "type": "command",
+      "command": "python3 ~/.agent-bridge/bridge.py agy-hook SessionStart",
+      "timeout": 10
+    }
+  ],
+  "PreInvocation": [
+    {
+      "type": "command",
+      "command": "python3 ~/.agent-bridge/bridge.py agy-hook PreInvocation",
+      "timeout": 10
+    }
+  ],
+  "Stop": [
+    {
+      "type": "command",
+      "command": "python3 ~/.agent-bridge/bridge.py agy-hook Stop",
+      "timeout": 21660
+    }
+  ]
+}

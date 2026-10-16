@@ -1,0 +1,8 @@
+# Runtime data of the bridge: messages and local state, never commit.
+bridge/inbox/
+bridge/archive/
+bridge/cancelled/
+bridge/state/
+bridge/log.jsonl
+__pycache__/
+.claude/settings.local.json
