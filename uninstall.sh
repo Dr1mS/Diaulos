@@ -30,7 +30,7 @@ if os.path.exists(settings_path):
     with open(settings_path) as f:
         settings = json.load(f)
     allow = settings.get("permissions", {}).get("allow", [])
-    keep = [r for r in allow if "~/.agent-bridge/bridge.py" not in r]
+    keep = [r for r in allow if "~/.agent-bridge/bridge.py" not in r and not r.startswith("mcp__agent-bridge__")]
     if keep != allow:
         settings["permissions"]["allow"] = keep
         with open(settings_path, "w") as f:
@@ -39,8 +39,11 @@ if os.path.exists(settings_path):
         print("removed claude allow rules")
 EOF
 
+if command -v claude >/dev/null; then
+  claude mcp remove -s user agent-bridge >/dev/null 2>&1 && echo "removed claude mcp server"
+fi
 rm -rf "$HOME/.claude/skills/agy-bridge" && echo "removed claude skill"
-rm -f "$BRIDGE_HOME/bridge.py"
+rm -f "$BRIDGE_HOME/bridge.py" "$BRIDGE_HOME/mcp_channel.py"
 if [ "${1:-}" = "--purge" ]; then
   rm -rf "$BRIDGE_HOME" && echo "purged $BRIDGE_HOME"
 fi

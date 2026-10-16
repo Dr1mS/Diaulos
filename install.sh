@@ -12,7 +12,18 @@ BRIDGE_HOME="${AGENT_BRIDGE_HOME:-$HOME/.agent-bridge}"
 
 mkdir -p "$BRIDGE_HOME"
 install -m 755 "$REPO/bridge/bridge.py" "$BRIDGE_HOME/bridge.py"
-echo "bridge      -> $BRIDGE_HOME/bridge.py"
+install -m 755 "$REPO/bridge/mcp_channel.py" "$BRIDGE_HOME/mcp_channel.py"
+echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel}.py"
+
+# MCP channel server for every Claude Code session. It only reads its inbox in
+# sessions started with: claude --dangerously-load-development-channels server:agent-bridge
+if command -v claude >/dev/null; then
+  claude mcp remove -s user agent-bridge >/dev/null 2>&1 || true
+  claude mcp add -s user agent-bridge -- python3 "$BRIDGE_HOME/mcp_channel.py" >/dev/null
+  echo "claude mcp  -> agent-bridge (user scope)"
+else
+  echo "claude CLI not found: skipped MCP server registration"
+fi
 
 mkdir -p "$HOME/.claude/skills/agy-bridge"
 install -m 644 "$REPO/install/claude-skill/SKILL.md" "$HOME/.claude/skills/agy-bridge/SKILL.md"
@@ -51,9 +62,11 @@ print("agy hooks   -> ~/.gemini/config/hooks.json (key agent-bridge)")
 settings_path = os.path.join(home, ".claude/settings.json")
 settings = load(settings_path)
 allow = settings.setdefault("permissions", {}).setdefault("allow", [])
-rule = "Bash(python3 ~/.agent-bridge/bridge.py *)"
-monitor_rule = "Bash(python3 -u ~/.agent-bridge/bridge.py watch *)"
-for r in (rule, monitor_rule):
+rules = ["Bash(python3 ~/.agent-bridge/bridge.py *)",
+         "Bash(python3 -u ~/.agent-bridge/bridge.py watch *)",
+         "mcp__agent-bridge__send",
+         "mcp__agent-bridge__list_agents"]
+for r in rules:
     if r not in allow:
         allow.append(r)
 save(settings_path, settings)
@@ -62,3 +75,4 @@ EOF
 
 echo
 echo "Done. Restart agy sessions so they load the new hooks."
+echo "Start Claude Code with: claude --dangerously-load-development-channels server:agent-bridge"

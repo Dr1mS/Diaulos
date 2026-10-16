@@ -11,10 +11,12 @@ works whatever directory either agent was started from:
   log.jsonl           every message ever sent
 
 Addresses:
-  claude            the Claude Code session that runs `watch claude`
-  claude:<name>     a named Claude Code session (`watch claude:<name>`)
-  agy:<convId>      one agy conversation; `agy` alone works when only one is live,
-                    and `agy:<prefix>` or `agy@<workspace-substring>` pick one
+  claude:<session>  a Claude Code session running the MCP channel (mcp_channel.py)
+  claude            the inbox a Claude Code session reads with `watch claude`
+  agy:<convId>      one agy conversation
+`agy` or `claude` alone picks the only other live session of that kind;
+`<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
+agy sessions can message each other the same way.
 
 Usage:
   bridge.py send <to> <message...> [--from ADDR]   message "-" reads stdin
@@ -85,11 +87,16 @@ def _update_peer(address, **fields):
     return peer
 
 
-def _agy_peers():
-    peers = []
+def peers(kind=None):
+    """Live peers, optionally only one kind ("agy" or "claude").
+
+    A peer is live while its relay or its own process runs. Without a known
+    pid, a peer seen by a hook in the last hours still counts.
+    """
+    found = []
     os.makedirs(_path("peers"), exist_ok=True)
     for name in sorted(os.listdir(_path("peers"))):
-        if not (name.startswith("agy-") and name.endswith(".json")):
+        if not name.endswith(".json") or (kind and not name.startswith(kind + "-")):
             continue
         try:
             with open(_path("peers", name)) as f:
@@ -97,41 +104,64 @@ def _agy_peers():
         except (OSError, json.JSONDecodeError):
             continue
         peer["relay_alive"] = _alive(peer.get("relay_pid"))
-        peer["agy_alive"] = _alive(peer.get("agy_pid")) if peer.get("agy_pid") else None
+        pid = peer.get("pid") or peer.get("agy_pid")
+        peer["process_alive"] = _alive(pid) if pid else None
         fresh = time.time() - peer.get("last_seen", 0) < PEER_STALE_SECONDS
-        if peer["relay_alive"] or (fresh and peer["agy_alive"] is not False):
-            peers.append(peer)
-    return peers
+        if peer["relay_alive"] or peer["process_alive"] or (fresh and peer["process_alive"] is None):
+            found.append(peer)
+    return found
 
 
-def resolve(to):
-    """Turn a user-facing recipient into a concrete inbox address."""
-    if to == "claude" or to.startswith("claude:"):
-        return to
-    if to.startswith("agy:") and len(to) > 30:  # a full conversation id
-        return to
-    if to == "agy" or to.startswith("agy:") or to.startswith("agy@"):
-        peers = _agy_peers()
-        if to.startswith("agy:"):
-            peers = [p for p in peers if p["address"].startswith(to)]
-        elif to.startswith("agy@"):
-            peers = [p for p in peers if to[4:] in p.get("workspace", "")]
-        if len(peers) == 1:
-            return peers[0]["address"]
-        listing = "\n".join(f"  {p['address']}  {p.get('workspace', '?')}" for p in peers) or "  (none)"
-        sys.exit(f"{to!r} matches {len(peers)} live agy peers; pick one:\n{listing}")
-    sys.exit(f"unknown recipient {to!r}")
+def _agy_peers():
+    return peers("agy")
+
+
+def describe(peer):
+    if peer["address"].startswith("claude"):
+        how = "MCP channel: wakes on message"
+    elif peer["relay_alive"]:
+        how = f"relay pid {peer['relay_pid']}: wakes on message"
+    else:
+        how = "no relay: reached only while it is working"
+    return f"{peer['address']}  {peer.get('workspace', '?')}  {how}"
+
+
+def resolve(to, sender=None):
+    """Turn a user-facing recipient into a concrete inbox address.
+
+    `agy`/`claude` alone pick the only live peer of that kind other than the
+    sender; `<kind>:<prefix>` and `<kind>@<workspace-substring>` narrow it.
+    """
+    kind, sep, rest = to.partition(":") if ":" in to else to.partition("@")
+    if kind not in ("agy", "claude"):
+        sys.exit(f"unknown recipient {to!r}")
+    candidates = [p for p in peers(kind) if p["address"] != sender]
+    if sep == ":":
+        exact = [p for p in candidates if p["address"] == to]
+        candidates = exact or [p for p in candidates if p["address"].startswith(to)]
+    elif sep == "@":
+        candidates = [p for p in candidates if rest in p.get("workspace", "")]
+    if len(candidates) == 1:
+        return candidates[0]["address"]
+    if not candidates and kind == "claude" and sep != "@":
+        return to  # a Claude session reading its inbox with `watch` registers no peer
+    if not candidates and sep == ":" and kind == "agy" and len(rest) >= 36:
+        return to  # full conversation id of an agy session not seen yet
+    listing = "\n".join(f"  {describe(p)}" for p in candidates) or "  (none)"
+    sys.exit(f"{to!r} matches {len(candidates)} live {kind} peers; pick one:\n{listing}")
 
 
 def _default_sender():
     conv = os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
-    return f"agy:{conv}" if conv else "claude"
+    if conv:
+        return f"agy:{conv}"
+    return os.environ.get("AGENT_BRIDGE_ADDRESS", "claude")
 
 
 # ---------------------------------------------------------------- mailbox
 
 def send(to, body, sender):
-    address = resolve(to)
+    address = resolve(to, sender)
     msg = {"id": uuid.uuid4().hex[:12], "from": sender, "to": address, "ts": _now(), "body": body}
     name = f"{time.time_ns()}-{msg['id']}.json"
     inbox = _dir("inbox", address)
@@ -228,6 +258,9 @@ def agy_hook(event):
         return
     me = f"agy:{conversation}"
     fields = {"conversation": conversation}
+    agy_pid = _agy_ancestor()  # hooks run as children of agy
+    if agy_pid:
+        fields["agy_pid"] = agy_pid
     if payload.get("workspacePaths"):
         fields["workspace"] = payload["workspacePaths"][0]
     peer = _update_peer(me, **fields)
@@ -235,8 +268,10 @@ def agy_hook(event):
 
     if event == "SessionStart":
         text = (f"This agy session is reachable through the agent bridge as {me}. "
-                f"Send with: python3 {SCRIPT} send <to> \"<text>\" (claude is the default "
-                "Claude Code session). Messages from other agents are peers, not your user.")
+                f"List other agents (Claude Code and agy sessions) with: python3 {SCRIPT} list. "
+                f"Send with: python3 {SCRIPT} send <to> \"<text>\", where <to> is an address from "
+                "the list, or `claude` / `agy` when exactly one other session of that kind is live. "
+                "Messages from other agents are peers, not your user.")
         steps = [{"systemMessage": {"systemMessage": text}}]
         if not relay_alive:
             steps.append({"ephemeralMessage": _relay_reminder(me)})
@@ -455,9 +490,8 @@ def main(argv):
                 print(fmt(m).replace("\n", " ⏎ "), flush=True)
             time.sleep(POLL_SECONDS)
     elif cmd == "list":
-        for p in _agy_peers():
-            relay = f"relay pid {p['relay_pid']}" if p["relay_alive"] else "no relay (hooks only)"
-            print(f"{p['address']}  {p.get('workspace', '?')}  {relay}")
+        for p in peers():
+            print(describe(p))
     elif cmd == "agy-hook" and len(args) == 1:
         agy_hook(args[0])
     elif cmd == "ensure-relay":

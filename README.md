@@ -16,9 +16,10 @@ Le journal détaillé des expériences est dans [docs/JOURNAL.md](docs/JOURNAL.m
 | Cible | Contenu |
 |---|---|
 | `~/.agent-bridge/bridge.py` | Le script du pont. Les boîtes aux lettres sont dans le même dossier. |
+| `~/.agent-bridge/mcp_channel.py` | Serveur MCP « channel » de Claude Code, déclaré pour l'utilisateur sous le nom `agent-bridge`. |
 | `~/.gemini/config/hooks.json` | Hooks agy globaux `SessionStart`, `PreInvocation` et `Stop`, sous la clé `agent-bridge`. |
 | `~/.claude/skills/agy-bridge/SKILL.md` | Skill Claude Code qui explique comment envoyer et recevoir des messages. |
-| `~/.claude/settings.json` | Règles d'autorisation `Bash(python3 ~/.agent-bridge/bridge.py *)`. |
+| `~/.claude/settings.json` | Règles d'autorisation `Bash(python3 ~/.agent-bridge/bridge.py *)` et des outils `mcp__agent-bridge__*`. |
 
 Avant de modifier un fichier de configuration, le script en garde une copie `<fichier>.bak-agent-bridge`. Relancez ensuite vos sessions agy : elles ne chargent leurs hooks qu'au démarrage.
 
@@ -55,7 +56,21 @@ python3 ~/.agent-bridge/bridge.py agy-relay --inspect         # champs liés au 
 
 ## Côté Claude Code
 
-La skill `agy-bridge` explique la marche à suivre. Pour être réveillé par agy, lancez l'outil `Monitor` sur `python3 -u ~/.agent-bridge/bridge.py watch claude`. Un `Monitor` expire au bout de 30 min maximum et doit alors être relancé ; les messages arrivés entre-temps restent dans la boîte.
+**Canal MCP (recommandé).** Lancez Claude Code avec :
+
+```bash
+claude --dangerously-load-development-channels server:agent-bridge
+```
+
+Le serveur `mcp_channel.py` surveille la boîte de la session et transmet chaque message sous forme d'événement `notifications/claude/channel`. Claude reste endormi jusqu'à l'arrivée d'un message : pas de `Monitor` à relancer, pas de réveil toutes les 30 min, pas de rechargement du cache. Il fournit aussi les outils `send` et `list_agents`. L'adresse de la session est `claude:<nom de session>`, lue dans `~/.claude/sessions/<pid>.json`.
+
+Le serveur est installé pour toutes les sessions Claude, mais il ne touche à la boîte que si la ligne de commande de son process parent `claude` contient le canal `server:agent-bridge`. Sans cette précaution, une session lancée sans canal prendrait les messages, et Claude Code jetterait les événements sans rien dire. Les « channels » sont en préversion de recherche : https://code.claude.com/docs/en/channels-reference.md.
+
+**Solution de repli.** Sans canal, lancez l'outil `Monitor` sur `python3 -u ~/.agent-bridge/bridge.py watch claude`, qui lit la boîte commune `claude`. Il expire au bout de 30 min et doit être relancé.
+
+## Plusieurs sessions, et agy ↔ agy
+
+Le pont relie n'importe quel nombre de sessions. `bridge.py list` (ou l'outil `list_agents`) affiche toutes les sessions actives et la façon dont chacune est réveillée. `send agy` ou `send claude` choisit la seule *autre* session de ce type, puisque l'expéditeur est exclu. S'il y en a plusieurs, la commande refuse et affiche la liste ; utilisez alors `<type>:<préfixe>` ou `<type>@<partie du chemin du dossier>`. Deux sessions agy peuvent donc se parler directement, et deux sessions Claude aussi.
 
 ## Sécurité
 
