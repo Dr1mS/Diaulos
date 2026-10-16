@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings, even when checked out on Windows.
+*.sh text eol=lf
+# cmd.exe needs CRLF to run batch labels reliably.
+*.cmd text eol=crlf

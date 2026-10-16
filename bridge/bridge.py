@@ -46,6 +46,7 @@ POLL_SECONDS = 1.0
 LISTEN_MAX_SECONDS = 6 * 3600  # keep below the Stop hook timeout in hooks.json
 RELAY_GRACE_SECONDS = 3  # let a running agy pick the message up through its hooks first
 PEER_STALE_SECONDS = 6 * 3600
+WINDOWS = os.name == "nt"
 
 
 def _path(*parts):
@@ -62,8 +63,108 @@ def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _alive(pid):
-    return bool(pid) and os.path.exists(f"/proc/{pid}")
+def _replace(src, dst):
+    """os.replace, retried: on Windows it fails while another process has `dst` open."""
+    for attempt in range(20):
+        try:
+            return os.replace(src, dst)
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
+
+
+def utf8_stdio():
+    """Use UTF-8 on stdin/stdout/stderr. Windows defaults to the ANSI code page (cp1252)."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", **({"newline": "\n"} if stream is not sys.stdin else {}))
+
+
+# ---------------------------------------------------------------- processes
+# Linux reads /proc; Windows uses _winapi and, for the process table only, ctypes
+# (standard library only).
+
+if WINDOWS:
+    import _winapi
+
+    def _alive(pid):
+        # Never os.kill(pid, 0) here: on Windows it terminates the process.
+        if not pid:
+            return False
+        try:
+            handle = _winapi.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        except OSError as e:
+            return e.winerror == 5  # access denied: it exists
+        try:
+            return _winapi.GetExitCodeProcess(handle) == 259  # STILL_ACTIVE
+        finally:
+            _winapi.CloseHandle(handle)
+
+    def _process_table():
+        """{pid: (parent pid, lowercase exe name)} for every running process.
+
+        ctypes is imported here, not at module level: the relay must never load
+        it. agy runs commands on a desktop it closes when the command ends, and
+        a process left on that desktop fails to initialize _ctypes.
+        """
+        import ctypes
+        from ctypes import wintypes
+
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                        ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        k32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+        k32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+        if snap in (None, wintypes.HANDLE(-1).value):
+            return {}
+        table = {}
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                table[entry.th32ProcessID] = (entry.th32ParentProcessID, entry.szExeFile.lower())
+                ok = k32.Process32NextW(snap, ctypes.byref(entry))
+        finally:
+            k32.CloseHandle(snap)
+        return table
+
+    def _ancestor(name):
+        """Pid of the nearest ancestor running `name` (e.g. "agy"), or None."""
+        table, pid, seen = _process_table(), os.getppid(), set()
+        while pid and pid in table and pid not in seen:  # pids are reused: guard against cycles
+            seen.add(pid)
+            parent, exe = table[pid]
+            if exe in (name, name + ".exe"):
+                return pid
+            pid = parent
+        return None
+else:
+    def _alive(pid):
+        return bool(pid) and os.path.exists(f"/proc/{pid}")
+
+    def _ancestor(name):
+        pid = os.getppid()
+        while pid > 1:
+            try:
+                with open(f"/proc/{pid}/comm") as f:
+                    if f.read().strip() == name:
+                        return pid
+                with open(f"/proc/{pid}/stat") as f:
+                    pid = int(f.read().rsplit(")", 1)[1].split()[1])
+            except OSError:
+                return None
+        return None
 
 
 # ---------------------------------------------------------------- peers
@@ -75,7 +176,7 @@ def _peer_file(address):
 
 def _read_peer(address):
     try:
-        with open(_peer_file(address)) as f:
+        with open(_peer_file(address), encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
@@ -84,10 +185,10 @@ def _read_peer(address):
 def _update_peer(address, **fields):
     peer = _read_peer(address) or {"address": address}
     peer.update(fields, last_seen=time.time())
-    tmp = _peer_file(address) + ".tmp"
-    with open(tmp, "w") as f:
+    tmp = f"{_peer_file(address)}.{os.getpid()}.tmp"  # one per writer: hooks and relay may overlap
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(peer, f)
-    os.rename(tmp, _peer_file(address))
+    _replace(tmp, _peer_file(address))
     return peer
 
 
@@ -103,7 +204,7 @@ def peers(kind=None):
         if not name.endswith(".json") or (kind and not name.startswith(kind + "-")):
             continue
         try:
-            with open(_path("peers", name)) as f:
+            with open(_path("peers", name), encoding="utf-8") as f:
                 peer = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
@@ -320,7 +421,7 @@ def agy_hook(event):
         if os.path.exists(listen) and not relay_alive:
             # The flag file may hold a wait length in seconds; empty means the max.
             try:
-                with open(listen) as f:
+                with open(listen, encoding="utf-8") as f:
                     seconds = int(f.read().strip() or LISTEN_MAX_SECONDS)
             except (OSError, ValueError):
                 seconds = LISTEN_MAX_SECONDS
@@ -369,17 +470,7 @@ def _ls_call(method, body):
 
 
 def _agy_ancestor():
-    pid = os.getppid()
-    while pid > 1:
-        try:
-            with open(f"/proc/{pid}/comm") as f:
-                if f.read().strip() == "agy":
-                    return pid
-            with open(f"/proc/{pid}/stat") as f:
-                pid = int(f.read().rsplit(")", 1)[1].split()[1])
-        except OSError:
-            return None
-    return None
+    return _ancestor("agy")
 
 
 def _last_user_config(cascade):
@@ -429,9 +520,20 @@ def ensure_relay():
         return
     agy_pid = _agy_ancestor()
     os.makedirs(_path("state"), exist_ok=True)
-    log = open(_path("state", f"relay-{cascade}.log"), "a")
-    proc = subprocess.Popen([sys.executable, "-u", SCRIPT, "agy-relay", "--agy-pid", str(agy_pid or 0)],
-                            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    log = open(_path("state", f"relay-{cascade}.log"), "a", encoding="utf-8")
+    argv = [sys.executable, "-u", SCRIPT, "agy-relay", "--agy-pid", str(agy_pid or 0)]
+    streams = dict(stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    if WINDOWS:
+        # Outlive agy's run_command shell: no console, own process group, and out of
+        # its job object when the job allows it.
+        flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                 | subprocess.CREATE_NO_WINDOW)
+        try:
+            proc = subprocess.Popen(argv, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **streams)
+        except OSError:
+            proc = subprocess.Popen(argv, creationflags=flags, **streams)
+    else:
+        proc = subprocess.Popen(argv, start_new_session=True, **streams)
     _update_peer(me, conversation=cascade, relay_pid=proc.pid, agy_pid=agy_pid,
                  workspace=peer.get("workspace") or os.getcwd())
     print(f"relay started for {me} (pid {proc.pid}); you are now reachable as {me}")
@@ -492,6 +594,7 @@ def agy_relay(args):
 # ---------------------------------------------------------------- cli
 
 def main(argv):
+    utf8_stdio()
     if len(argv) < 2:
         sys.exit(__doc__)
     cmd, args = argv[1], argv[2:]

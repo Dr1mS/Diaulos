@@ -6,7 +6,7 @@
 
 **Diaulos lets agy sessions talk to each other.** agy (Google's Antigravity CLI) has no way for one session to reach another: every conversation is an island. With Diaulos, any agy session can message any other one, and the message **wakes the receiver even when it is idle**. The sessions can run in any directory, and you don't have to copy-paste between terminals.
 
-It also connects **Claude Code** sessions, so Gemini and Claude agents can work together. Any number of sessions of either kind can join.
+It also connects **Claude Code** sessions, so Gemini and Claude agents can work together. Any number of sessions of either kind can join, on Linux and on Windows.
 
 ```
 agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude Code
@@ -19,16 +19,39 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude C
 - **Mix models.** Have Claude Code check what Gemini wrote, or the other way round.
 - **Wake an idle agent.** You don't have to watch every terminal: a message makes the receiving session take its turn on its own.
 
-## Quick start
+## Requirements
 
-Requirements: Linux, Python 3 (standard library only), agy, and Claude Code if you want to include it.
+- Linux or Windows 10/11
+- Python 3.8 or later (standard library only, nothing to `pip install`)
+- agy (Antigravity CLI)
+- Claude Code, if you want Claude sessions to join
+
+## Installation
 
 ```bash
 git clone https://github.com/Dr1mS/Diaulos && cd Diaulos
+```
+
+**Linux**
+
+```bash
 ./install.sh --shell
 ```
 
-Restart your agy sessions, because they load hooks only at startup. Open a new terminal for Claude Code.
+**Windows** (from PowerShell)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Shell
+```
+
+Then:
+
+1. **Restart your agy sessions.** agy loads hooks only at startup.
+2. **Open a new terminal for Claude Code.** With `--shell` / `-Shell`, a plain `claude` now starts with the bridge channel, and Claude Code shows a confirmation screen for it at each launch (see [Claude Code side](#claude-code-side)).
+
+Re-run the installer after each update of the repository. To remove everything, run `./uninstall.sh`, or `.\uninstall.ps1` on Windows; add `--purge` (`-Purge`) to delete the mailboxes too.
+
+## Quick start
 
 Two agy sessions talking, from inside either one (agy runs these with its shell tool):
 
@@ -40,7 +63,11 @@ python3 ~/.agent-bridge/bridge.py list
 python3 ~/.agent-bridge/bridge.py send agy "Can you check the API change I just made?"
 ```
 
-When exactly one *other* agy session is live, `agy` is enough. Otherwise, pick one with `agy@<part-of-its-directory>` or `agy:<id-prefix>`. agy knows all of this from the start: the `SessionStart` hook tells each session its own address and how to send. You can simply ask: *"ask the other agy session to review this"*.
+When exactly one *other* agy session is live, `agy` is enough. Otherwise, pick one with `agy@<part-of-its-directory>`, `agy:<id-prefix>` or `agy:<name>` for a conversation renamed with `/rename`. agy knows all of this from the start: the `SessionStart` hook tells each session its own address and the exact commands to use. You can simply ask: *"ask the other agy session to review this"*.
+
+In Claude Code, just ask too: *"send this to agy"*. Claude uses the `send` and `list_agents` tools of the `agent-bridge` MCP server.
+
+> **Windows:** Windows PowerShell does not expand `~` in arguments to programs. There, write `python3 $HOME\.agent-bridge\bridge.py …`. agy needs nothing special, because its hooks give it the absolute path.
 
 ## Proof: a four-agent relay
 
@@ -67,36 +94,66 @@ any agent ── send ──▶  ~/.agent-bridge/inbox/<address>/*.json
                          └─▶ Claude, idle:  MCP channel server pushes a <channel> event, which starts a new turn
 ```
 
-**agy side**
+### agy side
 
 - Global hooks live in `~/.gemini/config/hooks.json`. `SessionStart` introduces the bridge. `PreInvocation` delivers messages, and reminds agy to start its relay until the relay runs.
-- The **relay** wakes an idle agy. agy hands its own shell `ANTIGRAVITY_LS_ADDRESS` and `ANTIGRAVITY_CSRF_TOKEN`; this is documented in agy's built-in `plugin` skill. The relay is started from that shell, so it calls `SendUserCascadeMessage` on the local language server with agy's own credentials. It copies the conversation's latest `userConfig` (model, tools, permission grants), so the injected turn runs exactly like one you typed. It keeps the token in memory only and stops when agy exits.
+- The **relay** wakes an idle agy. agy hands its own shell `ANTIGRAVITY_LS_ADDRESS` and `ANTIGRAVITY_CSRF_TOKEN`; this is documented in agy's built-in `plugin` skill. The relay is started from that shell with `bridge.py ensure-relay`, so it calls `SendUserCascadeMessage` on the local language server with agy's own credentials. It copies the conversation's latest `userConfig` (model, tools, permission grants), so the injected turn runs exactly like one you typed. It keeps the token in memory only and stops when agy exits.
+- **Optional listening `Stop` hook**, for when no relay runs: if `~/.agent-bridge/state/agy.listen` exists, the hook waits for a message for the number of seconds written in that file (6 h if empty). It lets go as soon as you type in that conversation or delete the file.
 
-**Claude Code side**
+Manual relay checks, to run inside agy:
+
+```bash
+python3 ~/.agent-bridge/bridge.py agy-relay --probe "text"   # one delivery, prints the HTTP status
+python3 ~/.agent-bridge/bridge.py agy-relay --inspect        # model-related fields of the conversation
+```
+
+### Claude Code side
 
 - `mcp_channel.py` is an MCP server that declares the `claude/channel` capability (research preview) and pushes each message as `notifications/claude/channel`. The session sleeps until a message arrives: no polling, no periodic wake-up, no cache reload. It also provides the `send` and `list_agents` tools.
-- `install.sh --shell` makes a plain `claude` start with `--dangerously-load-development-channels server:agent-bridge`. Subcommands, `-p`, `--help` and `--version` are left alone. To skip the channel, run `command claude`.
-- Without the channel, a `Monitor` on `bridge.py watch claude` works as a fallback.
+- The channel must be enabled at launch: `claude --dangerously-load-development-channels server:agent-bridge`. The `--shell` / `-Shell` option of the installer does it for a plain `claude`:
+  - Linux: a function in `~/.bashrc`. Bypass it with `command claude`.
+  - Windows PowerShell: a function in your profile. Windows cmd: a `doskey` macro loaded by cmd's `AutoRun`. Bypass both with `claude.cmd`.
+  - Subcommands (`claude mcp …`), `-p`, `--help` and `--version` are left alone. Set `AGENT_BRIDGE_CHANNEL=0` to turn the wrapper off for a shell.
+- The MCP server is installed for every Claude session, but it reads its inbox only when its parent `claude` was started with the channel. Otherwise a session without the channel would take messages that Claude Code would then drop silently.
+- Without the channel, a `Monitor` on `python3 -u ~/.agent-bridge/bridge.py watch claude` works as a fallback. It reads the shared `claude` inbox and expires after 30 min.
 
-**Delivery**
+### Delivery
 
-- **Addresses**: `agy:<conversationId>`, `claude:<session name>`. An agy conversation can also be reached by its title, as `agy:<name>` (set it with `/rename` in agy; `list_agents` shows it). A Claude address follows `/rename`: the session switches to its new name within a second, and messages still waiting under the old name move with it.
-- **No duplicates**: a reader claims a message by renaming it into `archive/` before reading it, so each message is delivered at most once.
-- **Replies**: every message carries the sender's `from` address.
+- **Addresses**: `agy:<conversationId>`, `claude:<session name>`, and `claude` for the shared inbox read by `watch`. An agy conversation can also be reached by its title, as `agy:<name>` (set it with `/rename` in agy; `list_agents` shows it). A Claude address follows `/rename`: the session switches to its new name within a second, and messages still waiting under the old name move with it.
+- **No duplicates**: each message is a JSON file, written to a temporary file and then renamed. A reader claims a message by moving it into `archive/` before reading it, so each message is delivered at most once.
+- **Replies**: every message carries the sender's `from` address. In agy it is filled in from `ANTIGRAVITY_CONVERSATION_ID`.
 - **History**: `~/.agent-bridge/log.jsonl` records everything sent.
+
+### Windows specifics
+
+- Processes are found through the Win32 API instead of `/proc`, and every file and stream is read and written as UTF-8.
+- `install.ps1` writes the absolute path of your Python interpreter into the agy hooks and the MCP server entry, so they never depend on `PATH` or on the Microsoft Store aliases. agy runs hooks with `cmd /c`.
+- The relay does not import `ctypes`. Our explanation, from testing: agy appears to run each command on a desktop that it closes when the command ends. A process left behind on it cannot initialize `_ctypes`. The relay watches agy through `_winapi` instead.
 
 ## What gets installed
 
 | Path | What |
 |---|---|
-| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py` and the mailboxes |
+| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py`, the shell wrappers and the mailboxes |
 | `~/.gemini/config/hooks.json` | agy hooks, under the key `agent-bridge` |
 | `~/.claude/skills/agy-bridge/` | Claude Code skill that explains the bridge |
 | `~/.claude/settings.json` | allow rules for the bridge commands and MCP tools |
 | `~/.claude.json` (via `claude mcp add -s user`) | the `agent-bridge` MCP server |
-| `~/.bashrc` (only with `--shell`) | the `claude` wrapper |
+| `~/.bashrc` (Linux, `--shell` only) | sources the `claude` wrapper |
+| PowerShell profile (Windows, `-Shell` only) | dot-sources the `claude` wrapper |
+| `HKCU\Software\Microsoft\Command Processor\AutoRun` (Windows, `-Shell` only) | the `claude` doskey macro, added after any existing command |
 
-Every config file that is edited is backed up first as `<file>.bak-agent-bridge`. `./uninstall.sh` reverts everything; add `--purge` to delete the mailboxes as well.
+Every config file that is edited is backed up first as `<file>.bak-agent-bridge`. The uninstaller reverts all of the above.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| No channel confirmation screen when `claude` starts | The wrapper is not active in this terminal. Open a new terminal after installing, and check that you used `--shell` / `-Shell`. |
+| `list` shows an agy session with `no relay` | Read `~/.agent-bridge/state/relay-<conversationId>.log`. The relay can only be started from agy's own shell: ask agy to run `bridge.py ensure-relay`. |
+| agy never receives messages | Restart agy after installing. The files `~/.agent-bridge/state/last_<event>_input.json` are rewritten each time a hook runs. |
+| A Claude session is not listed | Only sessions started with the channel are listed. Check the launch command, or use the `watch claude` fallback. |
+| `'agy' matches 2 live agy peers` | Several sessions are live. Pick one with `agy@<directory>`, `agy:<id-prefix>` or `agy:<name>`. |
 
 ## Security
 
@@ -106,12 +163,14 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 
 ## Status and limits
 
-- Experimental. The project relies on an undocumented agy language-server method (`SendUserCascadeMessage`) and on Claude Code channels, which are a research preview. Either may change.
-- Linux only for now: peer detection reads `/proc`.
+- **Experimental.** Diaulos relies on an undocumented agy language-server method (`SendUserCascadeMessage`) and on Claude Code channels, which are a research preview. Either may change without notice.
 - Each relay is bound to one agy conversation and stops when that agy process exits.
 - Claude Code shows a confirmation screen at every launch while the channels preview requires it.
 
-Tested with Claude Code 2.1.301 and agy (language server 1.4.0, Gemini 3.8 Flash). Validated Antigravity clients: agy CLI, Antigravity Desktop and Antigravity IDE.
+**Tested with**
+
+- Linux: Claude Code 2.1.301, agy (language server 1.4.0, Gemini 3.8 Flash). Validated Antigravity clients: agy CLI, Antigravity Desktop and Antigravity IDE.
+- Windows 11: Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14. Tested: hooks, relay waking an idle agy, MCP channel waking an interactive Claude session, and messages both ways.
 
 The full lab notebook, in French, with every experiment, error message and design decision, is in [docs/JOURNAL.md](docs/JOURNAL.md).
 

@@ -22,6 +22,7 @@ newline-delimited JSON-RPC only.
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -30,7 +31,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge  # noqa: E402  (bridge.py ships next to this file)
 
 SERVER_NAME = "agent-bridge"
-CLAUDE_PID = os.getppid()
+# Linux: claude is the direct parent. Windows: a launcher may sit in between.
+CLAUDE_PID = (bridge._ancestor("claude") if bridge.WINDOWS else None) or os.getppid()
 
 
 def _session_address():
@@ -213,12 +215,23 @@ def channel_enabled():
     """
     if os.environ.get("AGENT_BRIDGE_FORCE_CHANNEL") == "1":
         return True
+    flags = ("--channels", "--dangerously-load-development-channels")
+    if bridge.WINDOWS:
+        # No /proc: ask WMI for the command line, as one string.
+        query = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={CLAUDE_PID}').CommandLine"
+        try:
+            cmdline = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return any(f in cmdline for f in flags) and f"server:{SERVER_NAME}" in cmdline
     try:
         with open(f"/proc/{os.getppid()}/cmdline", "rb") as f:
             argv = f.read().decode("utf-8", "replace").split("\0")
     except OSError:
         return False
-    flags = ("--channels", "--dangerously-load-development-channels")
     return any(a.startswith(flags) for a in argv) and any(f"server:{SERVER_NAME}" in a for a in argv)
 
 
@@ -232,23 +245,27 @@ def watch_inbox():
     log(f"watching {ADDRESS} in {bridge.HOME}")
     last_beat, watched = 0, ADDRESS
     while True:
-        me = current_address()
-        if me != watched:  # renamed: register the new name right away
-            watched, last_beat = me, 0
-        if time.time() - last_beat > 60:  # keep the peer entry fresh for `list`
-            bridge._update_peer(me, pid=CLAUDE_PID, workspace=os.getcwd())
-            last_beat = time.time()
-        for m in bridge.take(me):
-            write({"jsonrpc": "2.0", "method": "notifications/claude/channel", "params": {
-                "content": m["body"],
-                # meta keys must be letters, digits or underscores
-                "meta": {"from": m["from"], "msg_id": m["id"], "sent_at": m["ts"]},
-            }})
-            log(f"pushed {m['id']} from {m['from']}")
+        try:
+            me = current_address()
+            if me != watched:  # renamed: register the new name right away
+                watched, last_beat = me, 0
+            if time.time() - last_beat > 60:  # keep the peer entry fresh for `list`
+                bridge._update_peer(me, pid=CLAUDE_PID, workspace=os.getcwd())
+                last_beat = time.time()
+            for m in bridge.take(me):
+                write({"jsonrpc": "2.0", "method": "notifications/claude/channel", "params": {
+                    "content": m["body"],
+                    # meta keys must be letters, digits or underscores
+                    "meta": {"from": m["from"], "msg_id": m["id"], "sent_at": m["ts"]},
+                }})
+                log(f"pushed {m['id']} from {m['from']}")
+        except Exception as e:  # a passing file error must not stop the watcher for good
+            log("watch error:", repr(e))
         time.sleep(bridge.POLL_SECONDS)
 
 
 def main():
+    bridge.utf8_stdio()
     threading.Thread(target=watch_inbox, daemon=True).start()
     for line in sys.stdin:
         line = line.strip()
