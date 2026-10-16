@@ -80,7 +80,7 @@ any agent ── send ──▶  ~/.agent-bridge/inbox/<address>/*.json
 
 **Delivery**
 
-- **Addresses**: `agy:<conversationId>`, `claude:<session name>`.
+- **Addresses**: `agy:<conversationId>`, `claude:<session name>`. An agy conversation can also be reached by its title, as `agy:<name>` (set it with `/rename` in agy; `list_agents` shows it). A Claude address follows `/rename`: the session switches to its new name within a second, and messages still waiting under the old name move with it.
 - **No duplicates**: a reader claims a message by renaming it into `archive/` before reading it, so each message is delivered at most once.
 - **Replies**: every message carries the sender's `from` address.
 - **History**: `~/.agent-bridge/log.jsonl` records everything sent.
@@ -111,7 +111,7 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 - Each relay is bound to one agy conversation and stops when that agy process exits.
 - Claude Code shows a confirmation screen at every launch while the channels preview requires it.
 
-Tested with Claude Code 2.1.301 and agy (language server 1.4.0, Gemini 3.8 Flash).
+Tested with Claude Code 2.1.301 and agy (language server 1.4.0, Gemini 3.8 Flash). Validated Antigravity clients: agy CLI, Antigravity Desktop and Antigravity IDE.
 
 The full lab notebook, in French, with every experiment, error message and design decision, is in [docs/JOURNAL.md](docs/JOURNAL.md).
 

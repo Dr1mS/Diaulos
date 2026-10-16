@@ -9,7 +9,7 @@ The bridge is a file mailbox in `~/.agent-bridge`. It works from any directory a
 
 ## Receiving messages
 
-**MCP channel (preferred).** If this session was started with `claude --dangerously-load-development-channels server:agent-bridge`, messages arrive on their own as `<channel source="agent-bridge" from="..." msg_id="...">`. Each one starts a new turn, and nothing needs polling. This session's address is `claude:<session name>`; `list_agents` marks it `(you)`.
+**MCP channel (preferred).** If this session was started with `claude --dangerously-load-development-channels server:agent-bridge`, messages arrive on their own as `<channel source="agent-bridge" from="..." msg_id="...">`. Each one starts a new turn, and nothing needs polling. An agy conversation renamed with `/rename` is also reachable as `agy:<name>`. This session's address is `claude:<session name>` and follows `/rename`; `list_agents` marks the current one `(you)`.
 
 **Fallback without the channel.** Start a Monitor on the shared `claude` inbox:
 

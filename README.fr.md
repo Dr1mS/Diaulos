@@ -69,7 +69,7 @@ claude --dangerously-load-development-channels server:agent-bridge
 
 Avec `install.sh --shell`, la commande `claude` le fait toute seule : une fonction ajoutée à `~/.bashrc` ajoute le canal aux sessions interactives, mais pas aux sous-commandes (`claude mcp …`), au mode `-p`, à `--help` ni à `--version`. Pour lancer `claude` sans le canal : `command claude`, ou `AGENT_BRIDGE_CHANNEL=0`. Comme les channels sont en préversion, Claude Code affiche un écran de confirmation à chaque lancement.
 
-Le serveur `mcp_channel.py` surveille la boîte de la session et transmet chaque message sous forme d'événement `notifications/claude/channel`. Claude reste endormi jusqu'à l'arrivée d'un message : pas de `Monitor` à relancer, pas de réveil toutes les 30 min, pas de rechargement du cache. Il fournit aussi les outils `send` et `list_agents`. L'adresse de la session est `claude:<nom de session>`, lue dans `~/.claude/sessions/<pid>.json`.
+Le serveur `mcp_channel.py` surveille la boîte de la session et transmet chaque message sous forme d'événement `notifications/claude/channel`. Claude reste endormi jusqu'à l'arrivée d'un message : pas de `Monitor` à relancer, pas de réveil toutes les 30 min, pas de rechargement du cache. Il fournit aussi les outils `send` et `list_agents`. L'adresse de la session est `claude:<nom de session>`, lue dans `~/.claude/sessions/<pid>.json`. Une conversation agy est aussi joignable par son titre, `agy:<nom>` (donné avec `/rename` dans agy, affiché par `list_agents`). L'adresse Claude suit `/rename` : après un renommage, la session répond sous son nouveau nom, et les messages encore en attente dans l'ancienne boîte passent dans la nouvelle.
 
 Le serveur est installé pour toutes les sessions Claude, mais il ne touche à la boîte que si la ligne de commande de son process parent `claude` contient le canal `server:agent-bridge`. Sans cette précaution, une session lancée sans canal prendrait les messages, et Claude Code jetterait les événements sans rien dire. Les « channels » sont en préversion de recherche : https://code.claude.com/docs/en/channels-reference.md.
 
@@ -90,6 +90,7 @@ Le pont relie n'importe quel nombre de sessions. `bridge.py list` (ou l'outil `l
 
 - Claude Code 2.1.301 (Linux)
 - agy (Antigravity CLI), language server 1.4.0, modèle Gemini 3.8 Flash (High)
+- Clients Antigravity validés : agy CLI, Antigravity Desktop et Antigravity IDE
 
 ## Licence
 

@@ -93,3 +93,38 @@ Le test est une chaîne : chaque maillon ajoute son adresse et l'heure à une li
 | bureau-c4 → claude | Claude vers Claude, par l'outil MCP `send` | 15:52:43 | `Monitor` |
 
 Le circuit complet a pris 36 s, soit environ 9 s par saut, presque entièrement en temps de réflexion des modèles. La liste finale contient les 4 maillons, dans l'ordre et sans perte.
+
+## 10. Adresse Claude et `/rename`
+
+- **Défaut** : après `/rename coucou1`, agy n'a pas trouvé `claude:coucou1`. Le serveur MCP lisait le nom de session une seule fois, au démarrage, et restait enregistré sous l'ancien nom (`claude:communication-claude-agy-31`). Claude Code met pourtant à jour `name` dans `~/.claude/sessions/<pid>.json` dès le renommage.
+- **Correction** : `mcp_channel.py` relit ce fichier à chaque tour de surveillance (1 s) et à chaque appel d'outil. Si le nom a changé, il supprime l'ancienne entrée de pair, déplace les messages encore en attente vers la nouvelle boîte, et s'enregistre aussitôt sous le nouveau nom. Une erreur de lecture du fichier n'est jamais prise pour un renommage. Une session sans canal (outils seulement) suit aussi le nom pour l'expéditeur de `send`, mais ne touche ni aux boîtes ni aux pairs.
+- **Test** : avec un faux `HOME` et une boîte de test, la session `claude:avant` renommée en `coucou1` a disparu de `list_agents` au profit de `claude:coucou1 (you)`, et un message envoyé à `claude:coucou1` juste après a bien été transmis.
+- **Limite** : le texte `instructions` du serveur MCP est figé à la connexion ; il annonce donc l'adresse de départ. `list_agents` et le résultat de `send` donnent l'adresse courante.
+- **Validation réelle (16:17)** : après `/mcp` → Reconnect, la session s'est enregistrée sous `claude:coucou1`. agy `eecfe792…` lui a écrit à cette adresse, le message est arrivé par le canal, et la réponse est partie avec l'expéditeur `claude:coucou1`.
+- **Trois clients Antigravity (16:17–16:19)** : trois sessions (`agy:eecfe792…`, `agy:28cec74b…`, `agy:6d349d3e…`) ont écrit à `claude:coucou1` et reçu une confirmation. L'utilisateur valide ainsi les trois clients : agy CLI, Antigravity Desktop et Antigravity IDE.
+
+## 11. Noms des sessions agy et entrées Claude périmées (16:21)
+
+- **Constat** : l'utilisateur a renommé une session agy CLI avec `/rename coucou2`. Le bridge ne connaissait que `agy:<conversationId>`, donc ce nom n'apparaissait nulle part.
+- **Où agy range le nom** : `~/.gemini/antigravity-cli/annotations/<conversationId>.pbtxt`, en protobuf texte : `title:"coucou2"`. Sans `/rename`, agy y écrit un titre généré (par exemple `"Casual Greeting"`). La commande apparaît aussi dans `history.jsonl` avec le type `slash_command`.
+- **Correction** : `bridge.py` lit ce titre pour chaque pair agy. `list_agents` l'affiche entre guillemets, et `resolve` accepte `agy:<nom>` : adresse exacte d'abord, puis titre exact, puis préfixe d'adresse. Deux conversations de même titre font refuser l'envoi avec la liste des candidats. L'adresse réelle reste `agy:<conversationId>`, donc le titre peut changer sans casser les réponses.
+- **Test (16:23)** : `send agy:coucou2` a été résolu en `agy:e9439252…`. agy a confirmé la réception à 16:23:17, par le canal MCP.
+- **Second défaut** : `/mcp` → Reconnect tue l'ancien serveur MCP sans nettoyage. Comme le processus Claude vivait toujours, l'entrée `claude:communication-claude-agy-31` restait listée, alors que plus personne ne lisait cette boîte. Correction : au démarrage, le serveur retire les entrées `claude:*` portant le même pid que lui et reprend leurs messages en attente. Testé avec un faux `HOME` : un message envoyé à l'ancienne adresse avant le démarrage a été transmis sous la nouvelle.
+- **Validation réelle (16:24)** : après un nouveau `/mcp` → Reconnect, l'entrée `claude:communication-claude-agy-31` a disparu de `peers/`. Le serveur a aussi repris un message d'agy `eecfe792…` envoyé à 16:16:52 à cette ancienne adresse, avant le premier correctif ; il était resté bloqué dans l'ancienne boîte. Il a été livré à `claude:coucou1` avec 8 min de retard, sans perte.
+
+## 12. Test de non-régression (16:26)
+
+- **Hors ligne** (faux `HOME`, boîte de test) : 14 vérifications passées sur 14. Elles couvrent la résolution par adresse exacte, par préfixe, par `@espace-de-travail`, par titre agy (accents et guillemets échappés compris) ; le refus quand deux sessions ont le même titre ou quand `agy`/`claude` désignent plusieurs pairs ; l'exclusion de l'expéditeur ; et la livraison au plus une fois (`send` puis `take` deux fois).
+- **En réel** : `claude:coucou1` a envoyé un ping à chacune des 7 autres sessions ouvertes, chaque fois avec une forme d'adresse différente. Les 7 ont répondu `PONG` par leur propre `send`, sans intervention humaine.
+
+| Ping | Adresse utilisée | Destinataire | Envoyé | PONG |
+|---|---|---|---|---|
+| R1 | id complet | agy `28cec74b…` | 14:26:02 | 14:26:10 |
+| R2 | préfixe `agy:52620e0d` | agy `52620e0d…` | 14:26:03 | 14:26:09 |
+| R3 | id complet | agy `6badc65e…` | 14:26:04 | 14:26:23 |
+| R4 | `agy@MERDE` (espace de travail) | agy `6d349d3e…` | 14:26:05 | 14:26:14 |
+| R5 | titre `agy:coucou2` | agy `e9439252…` | 14:26:05 | 14:26:12 |
+| R6 | id complet | agy `eecfe792…` | 14:26:06 | 14:26:15 |
+| R7 | `claude:bureau-c4` | session Claude, canal MCP | 14:26:07 | 14:26:10 |
+
+Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps de réflexion des modèles compris. Les sessions agy couvrent les trois clients validés : agy CLI, Antigravity Desktop et Antigravity IDE.
