@@ -29,15 +29,17 @@ mkdir -p "$HOME/.claude/skills/agy-bridge"
 install -m 644 "$REPO/install/claude-skill/SKILL.md" "$HOME/.claude/skills/agy-bridge/SKILL.md"
 echo "claude skill -> ~/.claude/skills/agy-bridge/SKILL.md"
 
-python3 - "$REPO/install/agy-hooks.json" <<'EOF'
+python3 - "$REPO/install/agy-hooks.json" "$BRIDGE_HOME/bridge.py" <<'EOF'
 import json, os, shutil, sys
+
+template, target_script = sys.argv[1:3]
 
 def load(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             text = f.read().strip()
         return json.loads(text) if text else {}
-    except FileNotFoundError:
+    except (OSError, json.JSONDecodeError):
         return {}
 
 def save(path, data):
@@ -45,7 +47,7 @@ def save(path, data):
         shutil.copy2(path, path + ".bak-agent-bridge")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
     os.rename(tmp, path)
@@ -54,8 +56,17 @@ home = os.path.expanduser("~")
 
 hooks_path = os.path.join(home, ".gemini/config/hooks.json")
 hooks = load(hooks_path)
-with open(sys.argv[1]) as f:
-    hooks["agent-bridge"] = json.load(f)
+with open(template, encoding="utf-8") as f:
+    spec = json.load(f)
+
+default_script = os.path.join(home, ".agent-bridge/bridge.py")
+if target_script != default_script:
+    script_arg = f'"{target_script}"' if " " in target_script else target_script
+    for handlers in spec.values():
+        for h in handlers:
+            h["command"] = h["command"].replace("~/.agent-bridge/bridge.py", script_arg)
+
+hooks["agent-bridge"] = spec
 save(hooks_path, hooks)
 print("agy hooks   -> ~/.gemini/config/hooks.json (key agent-bridge)")
 
@@ -66,6 +77,9 @@ rules = ["Bash(python3 ~/.agent-bridge/bridge.py *)",
          "Bash(python3 -u ~/.agent-bridge/bridge.py watch *)",
          "mcp__agent-bridge__send",
          "mcp__agent-bridge__list_agents"]
+if target_script != default_script:
+    rules.extend([f"Bash(python3 {target_script} *)",
+                  f"Bash(python3 -u {target_script} watch *)"])
 for r in rules:
     if r not in allow:
         allow.append(r)

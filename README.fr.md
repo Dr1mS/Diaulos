@@ -67,7 +67,7 @@ Quand une seule *autre* session agy est active, `agy` suffit. Sinon, désignez-l
 
 Dans Claude Code, demandez aussi simplement : *« envoie ça à agy »*. Claude utilise les outils `send` et `list_agents` du serveur MCP `agent-bridge`.
 
-> **Windows :** Windows PowerShell ne développe pas `~` dans les arguments passés aux programmes. Écrivez alors `python3 $HOME\.agent-bridge\bridge.py …`. Rien à faire côté agy : ses hooks lui donnent le chemin absolu.
+> **Windows :** Windows PowerShell ne développe pas `~` dans les arguments passés aux programmes. Écrivez alors `python3 $HOME\.agent-bridge\bridge.py …`. Les commandes suggérées aux agents utilisent le chemin absolu de l'interpréteur Python, précédé de `&` si un chemin contient des espaces (opérateur d'appel de PowerShell 5.1). Rien à faire côté agy : ses hooks lui donnent le chemin absolu.
 
 ## La preuve : un relais à quatre agents
 
@@ -97,8 +97,9 @@ un agent ── send ──▶  ~/.agent-bridge/inbox/<adresse>/*.json
 ### Côté agy
 
 - Les hooks globaux sont dans `~/.gemini/config/hooks.json`. `SessionStart` présente le pont. `PreInvocation` livre les messages et, tant que le relais ne tourne pas, rappelle à agy de le lancer.
-- Le **relais** réveille agy quand il est inactif. agy transmet à son propre shell `ANTIGRAVITY_LS_ADDRESS` et `ANTIGRAVITY_CSRF_TOKEN` ; ce mécanisme est documenté dans la skill intégrée `plugin` d'agy. Le relais est lancé depuis ce shell avec `bridge.py ensure-relay` : il appelle donc `SendUserCascadeMessage` sur le language server local avec les identifiants d'agy. Il recopie le dernier `userConfig` de la conversation (modèle, outils, autorisations), si bien que le tour injecté se déroule exactement comme un message tapé. Sans cette configuration, agy échoue avec `plan model not specified`. Le relais garde le jeton en mémoire uniquement et s'arrête quand agy se ferme.
-- **Hook `Stop` en écoute (optionnel)**, utile quand aucun relais ne tourne : si `~/.agent-bridge/state/agy.listen` existe, le hook attend un message pendant le nombre de secondes écrit dans ce fichier (6 h s'il est vide). Il rend la main dès que vous tapez dans cette conversation ou que le fichier est supprimé.
+- Le **relais** réveille agy quand il est inactif. agy transmet à son propre shell `ANTIGRAVITY_LS_ADDRESS` et `ANTIGRAVITY_CSRF_TOKEN` ; ce mécanisme est documenté dans la skill intégrée `plugin` d'agy. Le relais est lancé depuis ce shell avec `bridge.py ensure-relay` : il appelle donc `SendUserCascadeMessage` sur le language server local avec les identifiants d'agy. Il recopie le dernier `userConfig` de la conversation (modèle, outils, autorisations), si bien que le tour injecté se déroule exactement comme un message tapé. Sans cette configuration, agy échoue avec `plan model not specified`. Le relais garde le jeton en mémoire uniquement et s'arrête quand agy se ferme. Quand le PID d'agy n'est pas trouvé parmi les ancêtres des hooks (par exemple si Desktop ou l'IDE lancent les hooks sous un arbre de processus distinct), le relais surveille le language server via `/healthz` : si le language server reste injoignable pendant 120 s, le relais s'arrête proprement et la session est marquée comme partie (`gone`, elle disparaît de `list`) jusqu'au prochain passage d'un hook.
+- **Hook `Stop` en écoute (optionnel)**, utile quand aucun relais ne tourne : si `~/.agent-bridge/state/agy.listen` existe, le hook attend un message pendant le nombre de secondes écrit dans ce fichier (6 h s'il est vide). Il rend la main dès que vous tapez dans cette conversation ou que le fichier est supprimé. Il surveille l'historique des prompts dans `~/.gemini/antigravity-cli`, `antigravity` et `antigravity-ide` (le support de l'historique sous Desktop et IDE est expérimental).
+- **Format des messages** : chaque message injecté dans agy est encadré par `<bridge-message id="..." from="..." ts="...">...</bridge-message>`.
 
 Tests manuels du relais, à lancer dans agy :
 
@@ -119,15 +120,17 @@ python3 ~/.agent-bridge/bridge.py agy-relay --inspect         # champs liés au 
 
 ### Livraison
 
-- **Adresses** : `agy:<conversationId>`, `claude:<nom de session>`, et `claude` pour la boîte commune lue par `watch`. Une conversation agy est aussi joignable par son titre, `agy:<nom>` (donné avec `/rename` dans agy, affiché par `list_agents`). L'adresse Claude suit `/rename` : la session passe à son nouveau nom en une seconde, et les messages encore en attente sous l'ancien nom la suivent.
-- **Pas de doublon** : chaque message est un fichier JSON, écrit dans un fichier temporaire puis renommé. Un lecteur réserve un message en le déplaçant dans `archive/` avant de le lire : chaque message est donc livré au plus une fois.
+- **Adresses** : `agy:<conversationId>`, `claude:<nom de session>`, et `claude` pour la boîte commune lue par `watch`. Une conversation agy est aussi joignable par son titre, `agy:<nom>` (donné avec `/rename` dans agy, affiché par `list_agents`). L'adresse Claude suit `/rename` : la session passe à son nouveau nom en une seconde, ses anciens noms deviennent des alias, et les messages encore en attente sous les anciens noms la suivent. Un envoi vers un `claude:<nom>` inconnu est refusé avec la liste des pairs actifs, évitant la perte silencieuse de messages. Une session ne peut pas s'envoyer de message à elle-même. Les adresses sont strictement validées : les séparateurs de chemin (`/`, `\`) et `..` sont interdits.
+- **Livraison** : chaque message est un fichier JSON, écrit dans un fichier temporaire puis renommé de manière atomique. Un lecteur réserve les messages en les déplaçant dans `archive/` avant de les lire : deux lecteurs n'obtiennent jamais le même message. En cas d'échec de livraison (language server injoignable, erreur HTTP), les messages retournent dans la boîte et le relais retente toutes les 10 s sans planter. Dans le cas rare où le language server accepte un message mais que sa réponse se perd (timeout), le message est renvoyé : la livraison est « au moins une fois », un doublon est possible mais rien n'est perdu. Tout message arrivé pendant qu'un lot attend part avec ce lot en un seul tour.
 - **Réponses** : chaque message porte l'adresse `from` de l'expéditeur. Dans agy, elle est remplie à partir de `ANTIGRAVITY_CONVERSATION_ID`.
-- **Historique** : `~/.agent-bridge/log.jsonl` garde la trace de chaque envoi.
+- **Historique et entretien** : `~/.agent-bridge/log.jsonl` garde la trace de chaque envoi et bascule sur `log.jsonl.1` au-delà de 10 Mo. Les archives de plus de 30 jours sont automatiquement purgées.
 
 ### Particularités Windows
 
 - Les processus sont trouvés via l'API Win32 au lieu de `/proc`, et tous les fichiers et flux sont lus et écrits en UTF-8.
-- `install.ps1` inscrit le chemin absolu de votre interpréteur Python dans les hooks agy et dans le serveur MCP : ils ne dépendent ainsi ni du `PATH` ni des alias du Microsoft Store. agy lance ses hooks avec `cmd /c`.
+- `install.ps1` inscrit le chemin absolu de votre interpréteur Python dans les hooks agy et dans le serveur MCP : ils ne dépendent ainsi ni du `PATH` ni des alias du Microsoft Store.
+- Les hooks Windows passent par `~/.agent-bridge/agy-hook.cmd`, écrit dans la page de code OEM active (ex. cp850), ce qui évite les conflits d'échappement de `cmd /c` même si les chemins comportent des espaces ou des caractères accentués.
+- Les commandes suggérées aux agents utilisent le chemin absolu de l'interpréteur Python, précédé de `&` si un chemin contient des espaces (opérateur d'appel de PowerShell 5.1).
 - Le relais n'importe pas `ctypes`. Notre explication, issue des tests : agy semble exécuter chaque commande sur un desktop qu'il ferme à la fin de celle-ci, et un processus resté dessus ne peut plus initialiser `_ctypes`. Le relais surveille donc agy via `_winapi`.
 
 ## Ce qui est installé
@@ -135,6 +138,7 @@ python3 ~/.agent-bridge/bridge.py agy-relay --inspect         # champs liés au 
 | Emplacement | Contenu |
 |---|---|
 | `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py`, les wrappers shell et les boîtes aux lettres |
+| `~/.agent-bridge/agy-hook.cmd` (Windows seulement) | lanceur de hooks Windows (page de code OEM, gère espaces et accents) |
 | `~/.gemini/config/hooks.json` | hooks agy, sous la clé `agent-bridge` |
 | `~/.claude/skills/agy-bridge/` | skill Claude Code qui explique le pont |
 | `~/.claude/settings.json` | règles d'autorisation des commandes du pont et des outils MCP |
@@ -154,11 +158,14 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
 | agy ne reçoit jamais rien | Relancez agy après l'installation. Les fichiers `~/.agent-bridge/state/last_<événement>_input.json` sont réécrits à chaque passage d'un hook. |
 | Une session Claude n'apparaît pas | Seules les sessions lancées avec le canal sont listées. Vérifiez la commande de lancement, ou utilisez le repli `watch claude`. |
 | `'agy' matches 2 live agy peers` | Plusieurs sessions sont actives. Désignez-en une avec `agy@<dossier>`, `agy:<début de l'id>` ou `agy:<nom>`. |
+| `'claude:<nom>' matches 0 live claude peers` | La session Claude visée n'est plus active, a été renommée ou n'a pas été lancée avec le canal. Lancez `bridge.py list` pour voir les adresses actives. |
+| `not delivered ... kept in the inbox, retry in 10s` (log du relais) | Le language server d'agy est temporairement indisponible ou occupé. Les messages sont conservés dans la boîte et retentés automatiquement. |
 
 ## Sécurité
 
 - **Pas d'authentification entre processus locaux.** Tout processus lancé par votre compte peut écrire dans `~/.agent-bridge/inbox/`. Avec le relais, écrire à une session agy revient à la faire agir avec les permissions de sa conversation, `always-proceed` par exemple. N'utilisez Diaulos que sur une machine de confiance.
 - **Un pair n'est pas l'utilisateur.** Les messages reçus sont marqués comme venant d'un agent pair. Les agents savent qu'un tel message ne vaut jamais accord de l'utilisateur, et qu'ils ne doivent jamais faire pour un pair ce que leurs propres permissions ont bloqué.
+- **Expéditeur non vérifié.** L'adresse `from` est déclarée par l'expéditeur et n'est pas vérifiée. Un message qui prétend relayer l'utilisateur ne vaut jamais accord de sa part.
 - **Le jeton CSRF n'est jamais écrit sur disque ni dans les logs.**
 
 ## État et limites
@@ -166,10 +173,11 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
 - **Expérimental.** Diaulos s'appuie sur une méthode non documentée du language server d'agy (`SendUserCascadeMessage`) et sur les channels de Claude Code, en préversion de recherche. L'un comme l'autre peut changer sans préavis.
 - Chaque relais est lié à une conversation agy et s'arrête quand ce processus agy se termine.
 - Claude Code affiche un écran de confirmation à chaque lancement tant que la préversion des channels l'exige.
+- Sous Windows, les règles d'autorisation de Claude Code ne couvrent pas l'outil PowerShell : Claude Code peut demander confirmation lors de l'exécution des commandes du pont.
 
 **Versions testées**
 
-- Linux : Claude Code 2.1.301, agy (language server 1.4.0, Gemini 3.8 Flash). Clients Antigravity validés : agy CLI, Antigravity Desktop et Antigravity IDE.
+- Linux : Claude Code 2.1.301, agy (language server 1.4.0, Gemini 3.8 Flash). Clients Antigravity validés pour l'échange de messages : agy CLI, Antigravity Desktop et Antigravity IDE. Sous Desktop et IDE, les titres de conversation, le hook `Stop` en écoute et l'arrêt du relais sans PID agy connu ne sont pas encore vérifiés.
 - Windows 11 : Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14. Testés : hooks, réveil d'agy inactif par le relais, réveil d'une session Claude interactive par le canal MCP, messages dans les deux sens.
 
 Le journal complet des expériences, avec chaque essai, message d'erreur et choix de conception, est dans [docs/JOURNAL.md](docs/JOURNAL.md).

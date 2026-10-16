@@ -128,3 +128,48 @@ Le circuit complet a pris 36 s, soit environ 9 s par saut, presque entièrement 
 | R7 | `claude:bureau-c4` | session Claude, canal MCP | 14:26:07 | 14:26:10 |
 
 Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps de réflexion des modèles compris. Les sessions agy couvrent les trois clients validés : agy CLI, Antigravity Desktop et Antigravity IDE.
+
+## 13. Audit croisé avec agy (17:45–18:33)
+
+- **Méthode** : Claude et agy (`agy:bf25db6c…`, sous Windows) ont audité le code chacun de leur côté, sans voir le travail de l'autre, puis ont comparé leurs listes par le pont. Dix constats retenus, dont trois graves, une dizaine de constats mineurs, et quatre pistes écartées après test (délai de grâce, `--from` entre guillemets, absence de `userConfig`, métacaractères de `cmd`).
+- **Constats graves** :
+  - le relais retirait les messages de la boîte avant de les livrer. Un language server injoignable (`URLError`) le faisait planter, les messages étaient perdus, et le log affichait à tort « agy exited » ;
+  - une adresse `claude:<inconnu>`, ou l'ancien nom d'une session après `/rename`, était acceptée sans erreur : le message partait dans une boîte que personne ne lit ;
+  - sous Antigravity Desktop/IDE, si les hooks n'ont pas « agy » parmi leurs ancêtres, le relais ne connaît pas le PID d'agy et ne s'arrêterait jamais (affirmation d'agy, non vérifiée).
+- **Livraison** : le §3 avait choisi « au plus une fois » pour éviter qu'un message toujours refusé bloque la boîte. Le relais passe à « au moins une fois », avec des limites :
+  - un message ne quitte la boîte qu'après un HTTP 200 du LS ;
+  - LS injoignable : le message reste dans la boîte, nouvelle tentative toutes les 10 s ;
+  - erreur 4xx : le message est mis de côté en `.failed` ;
+  - erreur 5xx, 408, 429, ou envoi sans réponse : 6 tentatives au plus ;
+  - un lot qui échoue est retenté message par message.
+
+  Un doublon reste possible dans un cas rare, mais aucun message n'est perdu. agy a validé ce compromis.
+- **Autres correctifs (Claude)** :
+  - les adresses sont validées avant de devenir des noms de fichiers ;
+  - `claude:<inconnu>` est refusé avec la liste des pairs ;
+  - les anciens noms d'avant `/rename` restent joignables ;
+  - on ne peut plus s'envoyer de message à soi-même ;
+  - l'outil MCP `send` répond toujours, même en cas d'erreur ;
+  - sans PID agy connu, le relais s'arrête après 120 s de LS injoignable ;
+  - chaque message est encadré par `<bridge-message id from ts>`, en précisant que `from` n'est pas vérifié ;
+  - le fichier d'une session est protégé contre les écritures simultanées ;
+  - le log tourne au-delà de 10 Mo et les archives de plus de 30 jours sont purgées.
+- **Correctifs d'agy** :
+  - sous Windows, les hooks passent par un lanceur `~/.agent-bridge/agy-hook.cmd` ;
+  - les désinstalleurs vérifient le processus avant de le tuer, supportent un JSON vide et ne retirent que les règles d'autorisation du pont ;
+  - `install.sh` respecte `AGENT_BRIDGE_HOME` ;
+  - README et `SKILL.md` sont mis à jour.
+- **Relecture croisée** :
+  - Claude a trouvé que le lanceur, écrit en UTF-8, cassait sur un chemin accentué (« Hélène »). agy l'écrit maintenant dans la page de code OEM ;
+  - Claude a aussi trouvé que le filtre des règles d'autorisation retirait tout ce qui contenait `bridge.py` ;
+  - dans la doc, Claude a rétabli Desktop et IDE comme validés pour l'échange de messages (§10) ;
+  - agy a signalé un dernier cas : un envoi sans réponse, juste après une réponse du LS, était retenté sans limite. Il compte maintenant comme une erreur 599, avec 6 tentatives au plus.
+- **Tests** : 40 vérifications ciblées passées sur 40, avec un faux `HOME` et un faux LS. Les tests de non-régression du canal MCP et des hooks (`cmd /c`, chemin accentué) passent aussi.
+- **Validation réelle (18:32)** :
+  - après la réinstallation, agy a lancé le nouveau relais (pid 47976) ;
+  - Claude a réveillé agy alors qu'il était inactif : `delivered ['f33ba504c6e9'] HTTP 200 config=True` ;
+  - agy a répondu « pong (nouveau relais) » par le canal MCP et confirmé que le message reçu était bien encadré par `<bridge-message>`.
+- **Reste à vérifier** :
+  - le nom du processus parent des hooks sous Desktop/IDE ;
+  - l'arrêt du relais à la fermeture réelle d'agy ;
+  - une désinstallation réelle sous Windows.

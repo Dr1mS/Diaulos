@@ -4,39 +4,62 @@ set -euo pipefail
 
 BRIDGE_HOME="${AGENT_BRIDGE_HOME:-$HOME/.agent-bridge}"
 
-# Stop running relays.
+# Stop running relays (verify process name and command line before killing).
 for f in "$BRIDGE_HOME"/peers/agy-*.json; do
   [ -e "$f" ] || continue
-  pid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("relay_pid") or "")' "$f")
-  [ -n "$pid" ] && kill "$pid" 2>/dev/null && echo "stopped relay $pid"
+  pid=$(python3 -c 'import json,sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        print(json.load(f).get("relay_pid") or "")
+except Exception:
+    pass' "$f" 2>/dev/null || true)
+  if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+    if grep -q "python" "/proc/$pid/cmdline" 2>/dev/null && grep -qF "agy-relay" "/proc/$pid/cmdline" 2>/dev/null; then
+      kill "$pid" 2>/dev/null && echo "stopped relay $pid"
+    fi
+  fi
 done
 
-python3 - <<'EOF'
-import json, os
+python3 - "$BRIDGE_HOME" <<'EOF'
+import json, os, sys
+bridge_home = sys.argv[1] if len(sys.argv) > 1 else ""
 home = os.path.expanduser("~")
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+        return json.loads(text) if text else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+def save(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
 
 hooks_path = os.path.join(home, ".gemini/config/hooks.json")
 if os.path.exists(hooks_path):
-    with open(hooks_path) as f:
-        hooks = json.load(f)
-    if hooks.pop("agent-bridge", None) is not None:
-        with open(hooks_path, "w") as f:
-            json.dump(hooks, f, indent=2)
-            f.write("\n")
+    hooks = load(hooks_path)
+    if isinstance(hooks, dict) and hooks.pop("agent-bridge", None) is not None:
+        save(hooks_path, hooks)
         print("removed agy hooks")
 
 settings_path = os.path.join(home, ".claude/settings.json")
 if os.path.exists(settings_path):
-    with open(settings_path) as f:
-        settings = json.load(f)
-    allow = settings.get("permissions", {}).get("allow", [])
-    keep = [r for r in allow if "~/.agent-bridge/bridge.py" not in r and not r.startswith("mcp__agent-bridge__")]
-    if keep != allow:
-        settings["permissions"]["allow"] = keep
-        with open(settings_path, "w") as f:
-            json.dump(settings, f, indent=2)
-            f.write("\n")
-        print("removed claude allow rules")
+    settings = load(settings_path)
+    if isinstance(settings, dict):
+        allow = settings.get("permissions", {}).get("allow", [])
+        if isinstance(allow, list):
+            keep = [r for r in allow if not (isinstance(r, str) and (
+                ".agent-bridge" in r or
+                (bridge_home and bridge_home in r) or
+                r.startswith("mcp__agent-bridge__")
+            ))]
+            if keep != allow:
+                settings["permissions"]["allow"] = keep
+                save(settings_path, settings)
+                print("removed claude allow rules")
 EOF
 
 if command -v claude >/dev/null; then

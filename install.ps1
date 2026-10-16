@@ -52,14 +52,14 @@ Write-Host 'claude skill -> ~/.claude/skills/agy-bridge/SKILL.md'
 $Configure = @'
 import json, os, shutil, sys
 
-template, python, script = sys.argv[1:4]
+template, python, script, hook_cmd = sys.argv[1:5]
 
 def load(path):
     try:
         with open(path, encoding="utf-8-sig") as f:
             text = f.read().strip()
         return json.loads(text) if text else {}
-    except FileNotFoundError:
+    except (OSError, json.JSONDecodeError):
         return {}
 
 def save(path, data):
@@ -72,9 +72,18 @@ def save(path, data):
         f.write("\n")
     os.replace(tmp, path)
 
-def arg(path):
-    # agy runs hooks with `cmd /c`, which mangles quotes: only quote when needed.
-    return '"%s"' % path if " " in path else path
+# agy runs hooks with `cmd /c <command>`. Windows cmd /c strips outer quotes
+# if multiple quoted tokens exist. Using a dedicated batch launcher avoids
+# quoting issues even when python or bridge.py paths contain spaces.
+# cmd.exe reads batch files in the active OEM code page: write agy-hook.cmd
+# using the "oem" codec so accented characters in user paths work.
+try:
+    with open(hook_cmd, "w", encoding="oem") as f:
+        f.write(f'@"{python}" "{script}" agy-hook %1\n')
+except UnicodeEncodeError as e:
+    sys.exit(f"path {hook_cmd!r} contains characters not representable in Windows OEM code page: {e}")
+
+launcher = '"%s"' % hook_cmd if " " in hook_cmd else hook_cmd
 
 home = os.path.expanduser("~")
 
@@ -82,10 +91,9 @@ hooks_path = os.path.join(home, ".gemini", "config", "hooks.json")
 hooks = load(hooks_path)
 with open(template, encoding="utf-8") as f:
     spec = json.load(f)
-for handlers in spec.values():
+for event, handlers in spec.items():
     for h in handlers:
-        h["command"] = h["command"].replace("python3 ~/.agent-bridge/bridge.py",
-                                            arg(python) + " " + arg(script))
+        h["command"] = f"{launcher} {event}"
 hooks["agent-bridge"] = spec
 save(hooks_path, hooks)
 print("agy hooks   -> ~/.gemini/config/hooks.json (key agent-bridge)")
@@ -103,7 +111,7 @@ for r in rules:
 save(settings_path, settings)
 print("claude allow -> ~/.claude/settings.json")
 '@
-$Configure | & $Python - (Join-Path $Repo 'install\agy-hooks.json') $Python (Join-Path $BridgeHome 'bridge.py')
+$Configure | & $Python - (Join-Path $Repo 'install\agy-hooks.json') $Python (Join-Path $BridgeHome 'bridge.py') (Join-Path $BridgeHome 'agy-hook.cmd')
 if ($LASTEXITCODE -ne 0) { throw 'configuration step failed' }
 
 $Wrapper = Join-Path $BridgeHome 'claude-channel.ps1'
