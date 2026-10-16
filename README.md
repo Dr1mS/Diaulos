@@ -1,90 +1,116 @@
-# Diaulos — pont Claude Code ↔ agy
+# Diaulos
 
-> Aux Jeux grecs, le *diaulos* était la course aller-retour : on courait jusqu'au bout du stade, puis on revenait. Ici, c'est le trajet d'un message et de sa réponse entre deux agents.
+**English** · [Français](README.fr.md)
 
-Ce projet fait communiquer des sessions **Claude Code** et des sessions **agy** (la CLI Antigravity de Google, modèles Gemini) qui tournent sur la même machine. Chaque agent peut envoyer un message à l'autre et le réveiller, quel que soit le dossier où il a été lancé, sans que l'utilisateur serve d'intermédiaire.
+> In the ancient Greek games, the *diaulos* was the out-and-back race: run to the far end of the stadium, turn, and run back. Here it is the trip a message makes from one agent to another and back.
 
-Le journal détaillé des expériences est dans [docs/JOURNAL.md](docs/JOURNAL.md).
+**Diaulos lets agy sessions talk to each other.** agy (Google's Antigravity CLI) has no way for one session to reach another: every conversation is an island. With Diaulos, any agy session can message any other one, and the message **wakes the receiver even when it is idle**. The sessions can run in any directory, and you don't have to copy-paste between terminals.
 
-## Installation
+It also connects **Claude Code** sessions, so Gemini and Claude agents can work together. Any number of sessions of either kind can join.
 
-```bash
-./install.sh --shell   # --shell : un simple `claude` démarre avec le canal (voir plus bas)
-./install.sh      # à relancer après chaque mise à jour du dépôt
-./uninstall.sh    # ajoutez --purge pour supprimer aussi les messages
+```
+agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude Code
 ```
 
-`install.sh` met en place :
+## What you can do with it
 
-| Cible | Contenu |
+- **Split work between agy sessions.** A planner session hands tasks to worker sessions, each working in its own repository, and collects their reports.
+- **Get a second opinion.** One agy session asks another to review its changes. In a real test, agy reviewed this project's own code and found three real bugs, all of them fixed since ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
+- **Mix models.** Have Claude Code check what Gemini wrote, or the other way round.
+- **Wake an idle agent.** You don't have to watch every terminal: a message makes the receiving session take its turn on its own.
+
+## Quick start
+
+Requirements: Linux, Python 3 (standard library only), agy, and Claude Code if you want to include it.
+
+```bash
+git clone https://github.com/Dr1mS/Diaulos && cd Diaulos
+./install.sh --shell
+```
+
+Restart your agy sessions, because they load hooks only at startup. Open a new terminal for Claude Code.
+
+Two agy sessions talking, from inside either one (agy runs these with its shell tool):
+
+```bash
+python3 ~/.agent-bridge/bridge.py list
+#  agy:52620e0d-…  /home/me/projects/api  relay pid 225225: wakes on message
+#  agy:e9439252-…  /home/me/projects/web  relay pid 241981: wakes on message
+
+python3 ~/.agent-bridge/bridge.py send agy "Can you check the API change I just made?"
+```
+
+When exactly one *other* agy session is live, `agy` is enough. Otherwise, pick one with `agy@<part-of-its-directory>` or `agy:<id-prefix>`. agy knows all of this from the start: the `SessionStart` hook tells each session its own address and how to send. You can simply ask: *"ask the other agy session to review this"*.
+
+## Proof: a four-agent relay
+
+Four sessions passed one message around a circle with no human involved. Each one appended its name and the time, then forwarded the message.
+
+| Hop | Link | Sent |
+|---|---|---|
+| Claude Code → agy A | relay wakes idle agy | 15:52:07 |
+| **agy A → agy B** | **agy to agy, relay wakes idle agy** | 15:52:19 |
+| agy B → Claude Code (2nd session) | MCP channel wakes idle Claude | 15:52:35 |
+| Claude Code → Claude Code | MCP `send` tool | 15:52:43 |
+
+The full circle took 36 s, about 9 s per hop. Almost all of that time was the models thinking: the bridge itself delivers in 1 to 3 s.
+
+## How it works
+
+The two tools share no protocol, so Diaulos uses a file mailbox plus the extension points each tool already offers.
+
+```
+any agent ── send ──▶  ~/.agent-bridge/inbox/<address>/*.json
+                         │
+                         ├─▶ agy, working:  PreInvocation hook injects the message before the next model call
+                         ├─▶ agy, idle:     relay calls the local language server, which starts a new turn
+                         └─▶ Claude, idle:  MCP channel server pushes a <channel> event, which starts a new turn
+```
+
+**agy side**
+
+- Global hooks live in `~/.gemini/config/hooks.json`. `SessionStart` introduces the bridge. `PreInvocation` delivers messages, and reminds agy to start its relay until the relay runs.
+- The **relay** wakes an idle agy. agy hands its own shell `ANTIGRAVITY_LS_ADDRESS` and `ANTIGRAVITY_CSRF_TOKEN`; this is documented in agy's built-in `plugin` skill. The relay is started from that shell, so it calls `SendUserCascadeMessage` on the local language server with agy's own credentials. It copies the conversation's latest `userConfig` (model, tools, permission grants), so the injected turn runs exactly like one you typed. It keeps the token in memory only and stops when agy exits.
+
+**Claude Code side**
+
+- `mcp_channel.py` is an MCP server that declares the `claude/channel` capability (research preview) and pushes each message as `notifications/claude/channel`. The session sleeps until a message arrives: no polling, no periodic wake-up, no cache reload. It also provides the `send` and `list_agents` tools.
+- `install.sh --shell` makes a plain `claude` start with `--dangerously-load-development-channels server:agent-bridge`. Subcommands, `-p`, `--help` and `--version` are left alone. To skip the channel, run `command claude`.
+- Without the channel, a `Monitor` on `bridge.py watch claude` works as a fallback.
+
+**Delivery**
+
+- **Addresses**: `agy:<conversationId>`, `claude:<session name>`.
+- **No duplicates**: a reader claims a message by renaming it into `archive/` before reading it, so each message is delivered at most once.
+- **Replies**: every message carries the sender's `from` address.
+- **History**: `~/.agent-bridge/log.jsonl` records everything sent.
+
+## What gets installed
+
+| Path | What |
 |---|---|
-| `~/.agent-bridge/bridge.py` | Le script du pont. Les boîtes aux lettres sont dans le même dossier. |
-| `~/.agent-bridge/mcp_channel.py` | Serveur MCP « channel » de Claude Code, déclaré pour l'utilisateur sous le nom `agent-bridge`. |
-| `~/.gemini/config/hooks.json` | Hooks agy globaux `SessionStart`, `PreInvocation` et `Stop`, sous la clé `agent-bridge`. |
-| `~/.claude/skills/agy-bridge/SKILL.md` | Skill Claude Code qui explique comment envoyer et recevoir des messages. |
-| `~/.claude/settings.json` | Règles d'autorisation `Bash(python3 ~/.agent-bridge/bridge.py *)` et des outils `mcp__agent-bridge__*`. |
+| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py` and the mailboxes |
+| `~/.gemini/config/hooks.json` | agy hooks, under the key `agent-bridge` |
+| `~/.claude/skills/agy-bridge/` | Claude Code skill that explains the bridge |
+| `~/.claude/settings.json` | allow rules for the bridge commands and MCP tools |
+| `~/.claude.json` (via `claude mcp add -s user`) | the `agent-bridge` MCP server |
+| `~/.bashrc` (only with `--shell`) | the `claude` wrapper |
 
-Avant de modifier un fichier de configuration, le script en garde une copie `<fichier>.bak-agent-bridge`. Relancez ensuite vos sessions agy : elles ne chargent leurs hooks qu'au démarrage.
+Every config file that is edited is backed up first as `<file>.bak-agent-bridge`. `./uninstall.sh` reverts everything; add `--purge` to delete the mailboxes as well.
 
-## Principe
+## Security
 
-Aucun des deux outils ne connaît le protocole de l'autre. Le pont repose sur une boîte aux lettres en fichiers et sur les points d'extension que chaque outil fournit déjà.
+- **No authentication between local processes.** Any process running as your user can write to `~/.agent-bridge/inbox/`. With the relay running, a message to an agy session makes it act with that conversation's permissions, for example `always-proceed`. Only use Diaulos on a machine you trust.
+- **Peers are not the user.** Incoming messages are labelled as coming from a peer agent. Agents are told that such a message never counts as user approval, and that they must never do for a peer something their own permissions blocked.
+- **The CSRF token never touches disk or logs.**
 
-```
-Claude Code                      ~/.agent-bridge/                       agy (n'importe quel dossier)
-───────────                      ────────────────                       ────────────────────────────
-send agy "…"      ──────────▶  inbox/agy-<conv>/*.json  ──▶  hook PreInvocation   (agy travaille)
-                                                        ──▶  relais LS           (agy inactif, sans limite)
-                                                        ──▶  hook Stop en écoute (agy vient de finir, optionnel)
-Monitor "watch claude" ◀─────  inbox/claude/*.json      ◀──  send claude "…"
-```
+## Status and limits
 
-- **Adresses** : `claude` désigne la session Claude Code qui lance `watch claude`. `claude:<nom>` désigne une session Claude nommée. `agy:<conversationId>` désigne une conversation agy. `send agy` marche quand une seule conversation agy est active. Sinon, utilisez `agy:<préfixe>` ou `agy@<partie du chemin du dossier>`. `bridge.py list` affiche les conversations agy actives.
-- **Réponses** : chaque message porte l'adresse `from` de l'expéditeur, et on répond à cette adresse. Dans agy, l'expéditeur est rempli tout seul à partir de `ANTIGRAVITY_CONVERSATION_ID`.
-- **Livraison** : chaque message est un fichier JSON, écrit dans un fichier temporaire puis renommé. Un lecteur le réserve en le déplaçant dans `archive/` avant de le lire. Un message est donc livré au plus une fois, sans doublon. `log.jsonl` garde la trace de chaque envoi.
+- Experimental. The project relies on an undocumented agy language-server method (`SendUserCascadeMessage`) and on Claude Code channels, which are a research preview. Either may change.
+- Linux only for now: peer detection reads `/proc`.
+- Each relay is bound to one agy conversation and stops when that agy process exits.
+- Claude Code shows a confirmation screen at every launch while the channels preview requires it.
 
-## Côté agy
+Tested with Claude Code 2.1.301 and agy (language server 1.4.0, Gemini 3.8 Flash).
 
-- **`SessionStart`** : présente le pont à agy et lui donne son adresse.
-- **`PreInvocation`** : injecte les messages en attente avant chaque appel du modèle. Tant que le relais de la conversation ne tourne pas, il ajoute un rappel éphémère qui demande à agy de lancer `python3 ~/.agent-bridge/bridge.py ensure-relay`.
-- **Relais** : il ne peut être lancé que par une commande shell d'agy, la seule à recevoir `ANTIGRAVITY_LS_ADDRESS` et `ANTIGRAVITY_CSRF_TOKEN`. Ce mécanisme est documenté dans la skill intégrée `plugin` d'agy. Le relais appelle `SendUserCascadeMessage` sur le language server local, ce qui réveille agy même inactif. Il recopie la configuration du dernier message tapé (`userConfig`, qui inclut le modèle) ; sans elle, agy échoue avec `plan model not specified`. Il garde le jeton en mémoire uniquement et s'arrête quand agy se ferme.
-- **`Stop` en écoute (optionnel)** : utile quand aucun relais ne tourne. Si `~/.agent-bridge/state/agy.listen` existe, le hook attend un message pendant le nombre de secondes écrit dans ce fichier, ou 6 h s'il est vide. Il s'arrête dès que l'utilisateur tape dans cette conversation (détecté via `~/.gemini/antigravity-cli/history.jsonl`) ou dès que le fichier est supprimé.
-
-Tests manuels du relais, à lancer dans agy :
-
-```bash
-python3 ~/.agent-bridge/bridge.py agy-relay --probe "texte"   # un seul envoi, affiche le statut HTTP
-python3 ~/.agent-bridge/bridge.py agy-relay --inspect         # champs liés au modèle de la conversation
-```
-
-## Côté Claude Code
-
-**Canal MCP (recommandé).** Lancez Claude Code avec :
-
-```bash
-claude --dangerously-load-development-channels server:agent-bridge
-```
-
-Avec `install.sh --shell`, la commande `claude` le fait toute seule : une fonction ajoutée à `~/.bashrc` ajoute le canal aux sessions interactives, mais pas aux sous-commandes (`claude mcp …`), au mode `-p`, à `--help` ni à `--version`. Pour lancer `claude` sans le canal : `command claude`, ou `AGENT_BRIDGE_CHANNEL=0`. Comme les channels sont en préversion, Claude Code affiche un écran de confirmation à chaque lancement.
-
-Le serveur `mcp_channel.py` surveille la boîte de la session et transmet chaque message sous forme d'événement `notifications/claude/channel`. Claude reste endormi jusqu'à l'arrivée d'un message : pas de `Monitor` à relancer, pas de réveil toutes les 30 min, pas de rechargement du cache. Il fournit aussi les outils `send` et `list_agents`. L'adresse de la session est `claude:<nom de session>`, lue dans `~/.claude/sessions/<pid>.json`.
-
-Le serveur est installé pour toutes les sessions Claude, mais il ne touche à la boîte que si la ligne de commande de son process parent `claude` contient le canal `server:agent-bridge`. Sans cette précaution, une session lancée sans canal prendrait les messages, et Claude Code jetterait les événements sans rien dire. Les « channels » sont en préversion de recherche : https://code.claude.com/docs/en/channels-reference.md.
-
-**Solution de repli.** Sans canal, lancez l'outil `Monitor` sur `python3 -u ~/.agent-bridge/bridge.py watch claude`, qui lit la boîte commune `claude`. Il expire au bout de 30 min et doit être relancé.
-
-## Plusieurs sessions, et agy ↔ agy
-
-Le pont relie n'importe quel nombre de sessions. `bridge.py list` (ou l'outil `list_agents`) affiche toutes les sessions actives et la façon dont chacune est réveillée. `send agy` ou `send claude` choisit la seule *autre* session de ce type, puisque l'expéditeur est exclu. S'il y en a plusieurs, la commande refuse et affiche la liste ; utilisez alors `<type>:<préfixe>` ou `<type>@<partie du chemin du dossier>`. Deux sessions agy peuvent donc se parler directement, et deux sessions Claude aussi.
-
-## Sécurité
-
-- **Pas d'authentification** : tout process lancé par votre compte utilisateur peut écrire dans `~/.agent-bridge/inbox/`. Avec le relais, écrire dans la boîte d'agy revient à le faire agir, avec les permissions de sa conversation (`always-proceed`, par exemple).
-- **Statut des messages** : un message reçu d'un pair est marqué comme venant d'un agent, et non de l'utilisateur. Il ne vaut jamais approbation.
-- **Pas de contournement de permissions** : quand le système de permissions de Claude Code bloque une action, Claude ne demande pas à agy de la faire à sa place. Le blocage remonte à l'utilisateur.
-- **Jeton CSRF** : il n'est jamais écrit sur disque ni dans les logs.
-
-## Versions testées
-
-- Claude Code 2.1.301 (Linux)
-- agy (Antigravity CLI), language server 1.4.0, modèle Gemini 3.8 Flash (High)
+The full lab notebook, in French, with every experiment, error message and design decision, is in [docs/JOURNAL.md](docs/JOURNAL.md).
