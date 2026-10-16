@@ -114,3 +114,7 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 Tested with Claude Code 2.1.301 and agy (language server 1.4.0, Gemini 3.8 Flash).
 
 The full lab notebook, in French, with every experiment, error message and design decision, is in [docs/JOURNAL.md](docs/JOURNAL.md).
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Adrien.M (Dr1mS).

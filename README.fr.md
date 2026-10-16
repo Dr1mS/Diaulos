@@ -90,3 +90,7 @@ Le pont relie n'importe quel nombre de sessions. `bridge.py list` (ou l'outil `l
 
 - Claude Code 2.1.301 (Linux)
 - agy (Antigravity CLI), language server 1.4.0, modèle Gemini 3.8 Flash (High)
+
+## Licence
+
+Apache License 2.0 — voir [LICENSE](LICENSE). Copyright 2026 Adrien.M (Dr1mS).
