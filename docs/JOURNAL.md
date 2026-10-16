@@ -78,3 +78,18 @@ But : faire marcher le pont quel que soit le dossier où l'on lance agy ou Claud
 - **Installation bloquée** : le classifieur de l'auto mode de Claude a refusé de lancer `install.sh`, qui déclare un serveur MCP et ajoute des autorisations à la configuration de Claude (raison : « Self-Modification »). L'utilisateur doit lancer l'installation lui-même.
 - **Validation du canal (15:48)** : une nouvelle session, lancée depuis `/home/user/Bureau` avec `--dangerously-load-development-channels server:agent-bridge`, s'est enregistrée sous l'adresse `claude:bureau-c4`. Le message envoyé à 15:48:37 lui est arrivé sous la forme `<channel source="agent-bridge" from="claude" msg_id="…" sent_at="…">`, dans un tour sans texte humain. Elle s'est réveillée toute seule et a répondu avec l'outil `send` à 15:48:47, soit 10 s d'aller-retour.
 - **Lanceur** : `install.sh --shell` ajoute à `~/.bashrc` une fonction `claude` (`install/claude-channel.sh`). Elle ajoute le canal aux sessions interactives, sans toucher aux sous-commandes (`mcp`, `update`…), au mode `-p`, à `--help` et à `--version`. On la contourne avec `command claude` ou `AGENT_BRIDGE_CHANNEL=0`. Le comportement a été testé avec un faux binaire `claude`, ainsi que l'ajout et le retrait dans `~/.bashrc` avec un faux `HOME`.
+
+## 9. Communication à 4 (15:52)
+
+Participants : la session Claude `Com_Claude_master` (boîte `claude`, avec `Monitor`), la session Claude `claude:bureau-c4` (canal MCP), agy A `agy:52620e0d…` (lancé depuis `/home/user/Bureau`, relais actif) et agy B `agy:e9439252…` (lancé depuis `~/Téléchargements`, relais actif).
+
+Le test est une chaîne : chaque maillon ajoute son adresse et l'heure à une liste, puis transmet le message complet au suivant, sans intervention humaine.
+
+| Saut | Liaison | Envoyé | Livré |
+|---|---|---|---|
+| claude → agy A | Claude vers agy, par le relais | 15:52:07 | 15:52:10 (relais, `config=True`) |
+| agy A → agy B | agy vers agy, par le relais | 15:52:19 | 15:52:22 (relais, `config=True`) |
+| agy B → bureau-c4 | agy vers Claude, par le canal MCP | 15:52:35 | événement `<channel>` |
+| bureau-c4 → claude | Claude vers Claude, par l'outil MCP `send` | 15:52:43 | `Monitor` |
+
+Le circuit complet a pris 36 s, soit environ 9 s par saut, presque entièrement en temps de réflexion des modèles. La liste finale contient les 4 maillons, dans l'ordre et sans perte.
