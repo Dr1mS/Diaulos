@@ -1,4 +1,6 @@
-# Pont Claude Code ↔ agy
+# Diaulos — pont Claude Code ↔ agy
+
+> Aux Jeux grecs, le *diaulos* était la course aller-retour : on courait jusqu'au bout du stade, puis on revenait. Ici, c'est le trajet d'un message et de sa réponse entre deux agents.
 
 Ce projet fait communiquer des sessions **Claude Code** et des sessions **agy** (la CLI Antigravity de Google, modèles Gemini) qui tournent sur la même machine. Chaque agent peut envoyer un message à l'autre et le réveiller, quel que soit le dossier où il a été lancé, sans que l'utilisateur serve d'intermédiaire.
 
