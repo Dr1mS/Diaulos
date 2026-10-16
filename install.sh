@@ -73,6 +73,20 @@ save(settings_path, settings)
 print("claude allow -> ~/.claude/settings.json")
 EOF
 
+install -m 644 "$REPO/install/claude-channel.sh" "$BRIDGE_HOME/claude-channel.sh"
+MARK="# agent-bridge: claude starts with the MCP channel"
+if [ "${1:-}" = "--shell" ]; then
+  if ! grep -qF "$MARK" "$HOME/.bashrc" 2>/dev/null; then
+    printf '\n%s\n[ -f "%s" ] && . "%s"\n' "$MARK" "$BRIDGE_HOME/claude-channel.sh" "$BRIDGE_HOME/claude-channel.sh" >> "$HOME/.bashrc"
+  fi
+  echo "shell       -> ~/.bashrc sources claude-channel.sh (open a new terminal)"
+fi
+
 echo
 echo "Done. Restart agy sessions so they load the new hooks."
-echo "Start Claude Code with: claude --dangerously-load-development-channels server:agent-bridge"
+if [ "${1:-}" = "--shell" ]; then
+  echo "In a new terminal, plain \`claude\` now starts with the agent-bridge channel."
+else
+  echo "Start Claude Code with: claude --dangerously-load-development-channels server:agent-bridge"
+  echo "(or re-run with --shell so a plain \`claude\` does it)"
+fi

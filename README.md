@@ -7,6 +7,7 @@ Le journal détaillé des expériences est dans [docs/JOURNAL.md](docs/JOURNAL.m
 ## Installation
 
 ```bash
+./install.sh --shell   # --shell : un simple `claude` démarre avec le canal (voir plus bas)
 ./install.sh      # à relancer après chaque mise à jour du dépôt
 ./uninstall.sh    # ajoutez --purge pour supprimer aussi les messages
 ```
@@ -61,6 +62,8 @@ python3 ~/.agent-bridge/bridge.py agy-relay --inspect         # champs liés au 
 ```bash
 claude --dangerously-load-development-channels server:agent-bridge
 ```
+
+Avec `install.sh --shell`, la commande `claude` le fait toute seule : une fonction ajoutée à `~/.bashrc` ajoute le canal aux sessions interactives, mais pas aux sous-commandes (`claude mcp …`), au mode `-p`, à `--help` ni à `--version`. Pour lancer `claude` sans le canal : `command claude`, ou `AGENT_BRIDGE_CHANNEL=0`. Comme les channels sont en préversion, Claude Code affiche un écran de confirmation à chaque lancement.
 
 Le serveur `mcp_channel.py` surveille la boîte de la session et transmet chaque message sous forme d'événement `notifications/claude/channel`. Claude reste endormi jusqu'à l'arrivée d'un message : pas de `Monitor` à relancer, pas de réveil toutes les 30 min, pas de rechargement du cache. Il fournit aussi les outils `send` et `list_agents`. L'adresse de la session est `claude:<nom de session>`, lue dans `~/.claude/sessions/<pid>.json`.
 

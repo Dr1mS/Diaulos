@@ -42,6 +42,26 @@ EOF
 if command -v claude >/dev/null; then
   claude mcp remove -s user agent-bridge >/dev/null 2>&1 && echo "removed claude mcp server"
 fi
+if grep -qF "# agent-bridge: claude starts with the MCP channel" "$HOME/.bashrc" 2>/dev/null; then
+  python3 - "$HOME/.bashrc" <<'EOF'
+import sys
+path = sys.argv[1]
+lines = open(path).read().split("\n")
+out, skip = [], 0
+for line in lines:
+    if line == "# agent-bridge: claude starts with the MCP channel":
+        skip = 2  # the marker and the source line after it
+        if out and out[-1] == "":
+            out.pop()
+    if skip:
+        skip -= 1
+        continue
+    out.append(line)
+open(path, "w").write("\n".join(out))
+EOF
+  echo "removed claude wrapper from ~/.bashrc"
+fi
+rm -f "$BRIDGE_HOME/claude-channel.sh"
 rm -rf "$HOME/.claude/skills/agy-bridge" && echo "removed claude skill"
 rm -f "$BRIDGE_HOME/bridge.py" "$BRIDGE_HOME/mcp_channel.py"
 if [ "${1:-}" = "--purge" ]; then
