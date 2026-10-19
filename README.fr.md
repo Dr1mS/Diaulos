@@ -18,6 +18,13 @@ agy (~/projets/api)  ⇄  agy (~/projets/web)  ⇄  Claude Code  ⇄  Claude Cod
 - **Demander un second avis.** Une session agy demande à une autre de relire ses modifications. Lors d'un vrai test, agy a relu le code de ce projet et trouvé trois vrais bugs, corrigés depuis ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Croiser les modèles.** Faites vérifier par Claude Code ce qu'a écrit Gemini, ou l'inverse.
 - **Réveiller un agent inactif.** Inutile de surveiller chaque terminal : à l'arrivée d'un message, la session destinataire reprend la main d'elle-même.
+- **Voir passer les messages.** Avec [Paros](https://github.com/Dr1mS/Paros), chaque session agy et Claude Code a un personnage en pixels sur le bureau, et chaque message envoyé par Diaulos vole d'un personnage à l'autre sous forme de lettre.
+
+## Paros
+
+Diaulos est compatible avec [Paros](https://github.com/Dr1mS/Paros), un compagnon de bureau pour Claude Code et agy. Chaque session a un petit personnage au bas de l'écran qui montre ce qu'elle fait. Quand une session envoie un message par Diaulos, son personnage lance une lettre au personnage du destinataire. Un message en attente dans la boîte d'une session agy dresse une boîte aux lettres à côté de son personnage. Rien à configurer : Paros lit les commandes du pont et les boîtes de `~/.agent-bridge/`.
+
+![Un personnage Claude lance une lettre, un personnage agy en lit une, un autre réfléchit, un dernier saute de joie](https://raw.githubusercontent.com/Dr1mS/Paros/main/docs/images/agy.png)
 
 ## Prérequis
 

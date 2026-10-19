@@ -18,6 +18,13 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude C
 - **Get a second opinion.** One agy session asks another to review its changes. In a real test, agy reviewed this project's own code and found three real bugs, all of them fixed since ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Mix models.** Have Claude Code check what Gemini wrote, or the other way round.
 - **Wake an idle agent.** You don't have to watch every terminal: a message makes the receiving session take its turn on its own.
+- **See the messages fly.** With [Paros](https://github.com/Dr1mS/Paros), each agy and Claude Code session has a pixel pet on your desktop, and every message sent through Diaulos flies from one pet to the other as a letter.
+
+## Paros
+
+Diaulos is compatible with [Paros](https://github.com/Dr1mS/Paros), a desktop companion for Claude Code and agy. Each session gets a small pet at the bottom of the screen that shows what it is doing. When a session sends a message through Diaulos, its pet throws a letter to the pet of the recipient. A message waiting in an agy inbox puts a mailbox beside its pet. Nothing to configure: Paros reads the bridge commands and the inboxes of `~/.agent-bridge/`.
+
+![A Claude pet throws a letter, an agy pet reads one, another thinks, a last one cheers](https://raw.githubusercontent.com/Dr1mS/Paros/main/docs/images/agy.png)
 
 ## Requirements
 
