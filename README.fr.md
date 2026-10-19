@@ -24,7 +24,7 @@ agy (~/projets/api)  ⇄  agy (~/projets/web)  ⇄  Claude Code  ⇄  Claude Cod
 
 Diaulos est compatible avec [Paros](https://github.com/Dr1mS/Paros), un compagnon de bureau pour Claude Code et agy. Chaque session a un petit personnage au bas de l'écran qui montre ce qu'elle fait. Quand une session envoie un message par Diaulos, son personnage lance une lettre au personnage du destinataire. Un message en attente dans la boîte d'une session agy dresse une boîte aux lettres à côté de son personnage. Rien à configurer : Paros lit les commandes du pont et les boîtes de `~/.agent-bridge/`.
 
-![Un personnage Claude lance une lettre, un personnage agy en lit une, un autre réfléchit, un dernier saute de joie](https://raw.githubusercontent.com/Dr1mS/Paros/main/docs/images/agy.png)
+![Un personnage Claude lance une lettre, un personnage agy en lit une, un autre réfléchit avec les petits personnages de ses sous-agents, un dernier fait signe pour une question](https://raw.githubusercontent.com/Dr1mS/Paros/main/docs/images/agy.png)
 
 ## Prérequis
 

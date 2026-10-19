@@ -24,7 +24,7 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude C
 
 Diaulos is compatible with [Paros](https://github.com/Dr1mS/Paros), a desktop companion for Claude Code and agy. Each session gets a small pet at the bottom of the screen that shows what it is doing. When a session sends a message through Diaulos, its pet throws a letter to the pet of the recipient. A message waiting in an agy inbox puts a mailbox beside its pet. Nothing to configure: Paros reads the bridge commands and the inboxes of `~/.agent-bridge/`.
 
-![A Claude pet throws a letter, an agy pet reads one, another thinks, a last one cheers](https://raw.githubusercontent.com/Dr1mS/Paros/main/docs/images/agy.png)
+![A Claude pet throws a letter, an agy pet reads one, another thinks with the small pets of its subagents, a last one waves at a question](https://raw.githubusercontent.com/Dr1mS/Paros/main/docs/images/agy.png)
 
 ## Requirements
 
