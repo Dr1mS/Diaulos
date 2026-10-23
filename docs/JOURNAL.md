@@ -173,3 +173,33 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - le nom du processus parent des hooks sous Desktop/IDE ;
   - l'arrêt du relais à la fermeture réelle d'agy ;
   - une désinstallation réelle sous Windows.
+
+# 2026-10-23
+
+## 14. Un programme externe réveille agy : le chat de promo
+
+- **Idée** : brancher une session agy sur un salon de messagerie WebSocket (TP de cours), pour qu'elle réponde seule aux messages.
+- **Montage (écrit par agy)** : `chat-monitor.js`, un démon Node :
+  - reste connecté au salon, se reconnecte en cas de coupure, ignore ses propres messages ;
+  - pour chaque message reçu, lance `bridge.py send agy:<id> - --from agy:chat-monitor` et passe le texte par stdin ;
+  - le relais réveille agy, qui écrit sa réponse dans `/tmp/bob-bot/outbox.txt` ;
+  - le démon lit le fichier toutes les 250 ms et envoie les nouvelles lignes sur le salon.
+- **Résultat** : 24 messages livrés, tous en `HTTP 200 config=True`, boîte vide à la fin. Aucune modification de Diaulos n'a été nécessaire.
+- **Ce que ça montre** : Diaulos sert aussi d'entrée d'événements. L'agent dort tant que le salon est silencieux, puis répond avec le contexte de toute la conversation. Le premier script, sans agent, tournait sur 5 réponses figées.
+- **Limites constatées** :
+  - le retour ne passe pas par le pont. `agy:chat-monitor` n'est pas un pair, donc `send` vers lui n'atteint personne : agy a contourné le problème avec un fichier ;
+  - le démon applique un délai de 5 s entre deux réveils et jette les messages qui arrivent pendant ce délai (2 perdus) ;
+  - chaque message coûte un tour complet, sur un contexte qui grossit ;
+  - latence de 5 à 8 s selon agy, non mesurée.
+- **Suite dans Diaulos** :
+  - nouvelle adresse `ext:<nom>` pour un programme qui n'est pas un agent. `bridge.py watch ext:<nom>` l'enregistre comme pair vivant, avec son pid ; il apparaît dans `list` et `list_agents`, et l'agent lui répond avec `send`, comme à un autre agent. Plus besoin de fichier à côté du pont ;
+  - un seul lecteur par adresse `ext:` (le second est refusé), marqué parti à la sortie, y compris sur SIGTERM ;
+  - `watch` et `recv` acceptent `--json` : un objet par ligne, retours à la ligne conservés ;
+  - le regroupement existait déjà : le relais attend 3 s (`RELAY_GRACE_SECONDS`) et livre la rafale en un seul tour. Le délai de 5 s du démon était inutile et faisait perdre des messages ;
+  - 19 vérifications passées sur 19, avec un faux `AGENT_BRIDGE_HOME`.
+- **Validation réelle (16:33)**, avec une nouvelle session agy inactive (« diaulos test ») et `watch ext:diaulos-test --json` lancé par Claude :
+  - `list` affiche `ext:diaulos-test  /home/user/Bureau  program pid 633681: reads with watch` ;
+  - 16:33:15.9 : envoi depuis `ext:diaulos-test`, avec la consigne de lancer `list` et de répondre en deux lignes ;
+  - 16:33:19 : le relais réveille agy (`delivered ['275a0477f6c6'] HTTP 200 config=True`) ;
+  - 16:33:30.7 : la réponse d'agy arrive par `send ext:diaulos-test`, en une ligne JSON avec son retour à la ligne intact. Aller-retour : 14,8 s, dont 3 s d'attente du relais ;
+  - à l'arrêt du watcher (SIGTERM), l'adaptateur est marqué parti, disparaît de `list`, et un `send` vers lui est refusé.

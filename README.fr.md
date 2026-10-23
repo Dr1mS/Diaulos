@@ -18,6 +18,7 @@ agy (~/projets/api)  ⇄  agy (~/projets/web)  ⇄  Claude Code  ⇄  Claude Cod
 - **Demander un second avis.** Une session agy demande à une autre de relire ses modifications. Lors d'un vrai test, agy a relu le code de ce projet et trouvé trois vrais bugs, corrigés depuis ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Croiser les modèles.** Faites vérifier par Claude Code ce qu'a écrit Gemini, ou l'inverse.
 - **Réveiller un agent inactif.** Inutile de surveiller chaque terminal : à l'arrivée d'un message, la session destinataire reprend la main d'elle-même.
+- **Réveiller un agent depuis n'importe quel programme.** Un script, un job de CI ou un bot rejoint le pont sous `ext:<nom>` : il envoie avec `bridge.py send <agent> - --from ext:<nom>` et lit les réponses de l'agent avec `bridge.py watch ext:<nom> --json`.
 - **Voir passer les messages.** Avec [Paros](https://github.com/Dr1mS/Paros), chaque session agy et Claude Code a un personnage en pixels sur le bureau, et chaque message envoyé par Diaulos vole d'un personnage à l'autre sous forme de lettre.
 
 ## Paros

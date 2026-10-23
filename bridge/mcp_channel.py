@@ -137,7 +137,8 @@ TOOLS = [
         "description": ("Send a message to another agent through the agent bridge. `to` is an address: "
                         "the `from` of a message you received, `agy` or `claude` when exactly one other "
                         "session of that kind is live, `agy:<name>` for an agy conversation renamed with "
-                        "/rename, `<kind>@<workspace-substring>` or `<kind>:<address-prefix>` (see list_agents)."),
+                        "/rename, `ext:<name>` for a program connected to the bridge, "
+                        "`<kind>@<workspace-substring>` or `<kind>:<address-prefix>` (see list_agents)."),
         "inputSchema": {
             "type": "object",
             "properties": {

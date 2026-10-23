@@ -14,6 +14,7 @@ Addresses:
   claude:<session>  a Claude Code session running the MCP channel (mcp_channel.py)
   claude            the inbox a Claude Code session reads with `watch claude`
   agy:<convId>      one agy conversation
+  ext:<name>        any other program, live while it runs `watch ext:<name>`
 `agy` or `claude` alone picks the only other live session of that kind;
 `agy:<name>` picks an agy conversation by its title (set with /rename);
 `<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
@@ -21,8 +22,9 @@ agy sessions can message each other the same way.
 
 Usage:
   bridge.py send <to> <message...> [--from ADDR]   message "-" reads stdin
-  bridge.py recv <address>                         print and archive pending messages
-  bridge.py watch <address>                        print one line per new message, forever
+  bridge.py recv <address> [--json]                print and archive pending messages
+  bridge.py watch <address> [--json]               print one line per new message, forever
+                                                   (--json: one JSON object per line)
   bridge.py list                                   show known agy peers
   bridge.py agy-hook <event>                       agy hook entry point (stdin/stdout JSON)
   bridge.py ensure-relay                           start this conversation's relay (agy shell only)
@@ -34,6 +36,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -56,7 +59,7 @@ ARCHIVE_DAYS = 30
 LOG_MAX_BYTES = 10 * 1024 * 1024
 WINDOWS = os.name == "nt"
 # Concrete addresses become file names: no path separators, no shell or Windows-reserved characters.
-ADDRESS_RE = re.compile(r"^(agy|claude)(:[A-Za-z0-9_.-]+)?$")
+ADDRESS_RE = re.compile(r"^(agy|claude|ext)(:[A-Za-z0-9_.-]+)?$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -240,7 +243,7 @@ def _update_peer(address, **fields):
 
 
 def peers(kind=None):
-    """Live peers, optionally only one kind ("agy" or "claude").
+    """Live peers, optionally only one kind ("agy", "claude" or "ext").
 
     A peer is live while its relay or its own process runs. Without a known
     pid, a peer seen by a hook in the last hours still counts, unless its
@@ -293,6 +296,8 @@ def _agy_peers():
 def describe(peer):
     if peer["address"].startswith("claude"):
         how = "MCP channel: wakes on message"
+    elif peer["address"].startswith("ext"):
+        how = f"program pid {peer['pid']}: reads with watch"
     elif peer["relay_alive"]:
         how = f"relay pid {peer['relay_pid']}: wakes on message"
     else:
@@ -312,7 +317,7 @@ def resolve(to, sender=None):
     session is refused, rather than written to an inbox nobody reads.
     """
     kind, sep, rest = to.partition(":") if ":" in to else to.partition("@")
-    if kind not in ("agy", "claude"):
+    if kind not in ("agy", "claude", "ext"):
         sys.exit(f"unknown recipient {to!r}")
     candidates = [p for p in peers(kind) if p["address"] != sender]
     if sep == ":":
@@ -421,6 +426,34 @@ def take(address):
 
 def fmt(msg):
     return f"[bridge msg {msg['id']} from={msg['from']} ts={msg['ts']}] {msg['body']}"
+
+
+def watch(address, as_json):
+    """Print new messages for `address` forever, one line each.
+
+    A program watching an `ext:<name>` address registers as a live peer, so
+    agents can list it and reply to it with `send`. Only one reader per
+    address: two would split the messages between them.
+    """
+    external = address.startswith("ext:")
+    if external:
+        _name(address)  # exits on an invalid address before it reaches the peer file
+        other = (_read_peer(address) or {}).get("pid")
+        if other != os.getpid() and _alive(other):
+            sys.exit(f"{address} is already watched by pid {other}")
+        _update_peer(address, pid=os.getpid(), workspace=os.getcwd(), gone=False)
+        # A program usually stops its watcher with SIGTERM: leave through `finally` too.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        while True:
+            for m in take(address):
+                print(json.dumps(m, ensure_ascii=False) if as_json else fmt(m).replace("\n", " ⏎ "), flush=True)
+            time.sleep(POLL_SECONDS)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if external:
+            _update_peer(address, pid=None, gone=True)
 
 
 def _cli():
@@ -832,14 +865,11 @@ def main(argv):
             body = sys.stdin.read()
         msg = send(to, body, sender)
         print(f"sent {msg['id']} to {msg['to']}")
-    elif cmd == "recv" and len(args) == 1:
+    elif cmd == "recv" and len(args) in (1, 2) and args[1:] in ([], ["--json"]):
         for m in take(args[0]):
-            print(fmt(m))
-    elif cmd == "watch" and len(args) == 1:
-        while True:
-            for m in take(args[0]):
-                print(fmt(m).replace("\n", " ⏎ "), flush=True)
-            time.sleep(POLL_SECONDS)
+            print(json.dumps(m, ensure_ascii=False) if args[1:] else fmt(m))
+    elif cmd == "watch" and len(args) in (1, 2) and args[1:] in ([], ["--json"]):
+        watch(args[0], bool(args[1:]))
     elif cmd == "list":
         for p in peers():
             print(describe(p))

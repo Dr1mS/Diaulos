@@ -18,6 +18,7 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude C
 - **Get a second opinion.** One agy session asks another to review its changes. In a real test, agy reviewed this project's own code and found three real bugs, all of them fixed since ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Mix models.** Have Claude Code check what Gemini wrote, or the other way round.
 - **Wake an idle agent.** You don't have to watch every terminal: a message makes the receiving session take its turn on its own.
+- **Wake an agent from any program.** A script, a CI job or a bot joins as `ext:<name>`: it sends with `bridge.py send <agent> - --from ext:<name>` and reads the agent's replies with `bridge.py watch ext:<name> --json`.
 - **See the messages fly.** With [Paros](https://github.com/Dr1mS/Paros), each agy and Claude Code session has a pixel pet on your desktop, and every message sent through Diaulos flies from one pet to the other as a letter.
 
 ## Paros
