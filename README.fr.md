@@ -18,7 +18,7 @@ agy (~/projets/api)  ⇄  agy (~/projets/web)  ⇄  Claude Code  ⇄  Claude Cod
 - **Demander un second avis.** Une session agy demande à une autre de relire ses modifications. Lors d'un vrai test, agy a relu le code de ce projet et trouvé trois vrais bugs, corrigés depuis ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Croiser les modèles.** Faites vérifier par Claude Code ce qu'a écrit Gemini, ou l'inverse.
 - **Réveiller un agent inactif.** Inutile de surveiller chaque terminal : à l'arrivée d'un message, la session destinataire reprend la main d'elle-même.
-- **Réveiller un agent depuis n'importe quel programme.** Un script, un job de CI ou un bot rejoint le pont sous `ext:<nom>` : il envoie avec `bridge.py send <agent> - --from ext:<nom>` et lit les réponses de l'agent avec `bridge.py watch ext:<nom> --json`.
+- **Réveiller un agent depuis n'importe quel programme.** Un script, un job de CI ou un bot rejoint le pont sous `ext:<nom>` : il envoie avec `bridge.py send <agent> - --from ext:<nom>` et lit les réponses de l'agent avec `bridge.py watch ext:<nom> --json`. **Lisez d'abord la section [Sécurité](#sécurité) :** le programme transmet du texte extérieur à un agent capable de lancer des commandes.
 - **Voir passer les messages.** Avec [Paros](https://github.com/Dr1mS/Paros), chaque session agy et Claude Code a un personnage en pixels sur le bureau, et chaque message envoyé par Diaulos vole d'un personnage à l'autre sous forme de lettre.
 
 ## Paros
@@ -175,6 +175,14 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
 - **Un pair n'est pas l'utilisateur.** Les messages reçus sont marqués comme venant d'un agent pair. Les agents savent qu'un tel message ne vaut jamais accord de l'utilisateur, et qu'ils ne doivent jamais faire pour un pair ce que leurs propres permissions ont bloqué.
 - **Expéditeur non vérifié.** L'adresse `from` est déclarée par l'expéditeur et n'est pas vérifiée. Un message qui prétend relayer l'utilisateur ne vaut jamais accord de sa part.
 - **Le jeton CSRF n'est jamais écrit sur disque ni dans les logs.**
+
+> [!WARNING]
+> **Brancher un programme (`ext:<nom>`), c'est confier du texte extérieur à un agent qui peut agir sur votre machine.** Un adaptateur transmet tout ce que sa source lui envoie : un message de chat, une issue, une ligne de log. Quiconque peut écrire dans cette source peut écrire à votre agent, y compris des instructions conçues pour le détourner (injection de prompt). Le pont présente ces messages comme venant d'un pair, jamais de l'utilisateur, mais cette mention guide le modèle, elle ne l'empêche de rien.
+>
+> - Ne branchez que des sources de confiance. Ne reliez jamais une source publique ou partagée (salon de discussion, issues publiques, e-mails entrants) à une session qui tourne en `always-proceed`, en validation automatique, ou qui a accès à des secrets.
+> - Donnez à l'adaptateur sa propre session d'agent, lancée dans un dossier qui ne contient rien de sensible.
+> - Partez du principe que tout ce que l'agent sait peut se retrouver dans ses réponses, donc à l'extérieur.
+> - Surveillez ce que fait l'agent, et arrêtez l'adaptateur quand vous n'êtes pas là.
 
 ## État et limites
 

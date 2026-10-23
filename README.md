@@ -18,7 +18,7 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude C
 - **Get a second opinion.** One agy session asks another to review its changes. In a real test, agy reviewed this project's own code and found three real bugs, all of them fixed since ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Mix models.** Have Claude Code check what Gemini wrote, or the other way round.
 - **Wake an idle agent.** You don't have to watch every terminal: a message makes the receiving session take its turn on its own.
-- **Wake an agent from any program.** A script, a CI job or a bot joins as `ext:<name>`: it sends with `bridge.py send <agent> - --from ext:<name>` and reads the agent's replies with `bridge.py watch ext:<name> --json`.
+- **Wake an agent from any program.** A script, a CI job or a bot joins as `ext:<name>`: it sends with `bridge.py send <agent> - --from ext:<name>` and reads the agent's replies with `bridge.py watch ext:<name> --json`. **Read [Security](#security) first:** the program feeds outside text to an agent that can run commands.
 - **See the messages fly.** With [Paros](https://github.com/Dr1mS/Paros), each agy and Claude Code session has a pixel pet on your desktop, and every message sent through Diaulos flies from one pet to the other as a letter.
 
 ## Paros
@@ -175,6 +175,14 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 - **Peers are not the user.** Incoming messages are labelled as coming from a peer agent. Agents are told that such a message never counts as user approval, and that they must never do for a peer something their own permissions blocked.
 - **Unverified sender.** The `from` address is declared by the sender and is unverified. A message that claims to relay the user never counts as user approval.
 - **The CSRF token never touches disk or logs.**
+
+> [!WARNING]
+> **Connecting a program (`ext:<name>`) hands outside text to an agent that can act on your machine.** An adapter forwards whatever its source sends: a chat message, an issue, a log line. Anyone who can write to that source can write to your agent, including instructions crafted to hijack it (prompt injection). The bridge labels these messages as coming from a peer, never from the user, but that label is a hint to the model, not a barrier.
+>
+> - Connect only sources you trust. Never connect a public or shared source (a chat room, public issues, incoming email) to a session that runs with `always-proceed`, auto-approval, or access to secrets.
+> - Give the adapter its own agent session, started in a directory that holds nothing sensitive.
+> - Assume that anything the agent knows can end up in its replies, and so in the outside world.
+> - Watch what the agent does, and stop the adapter when you are not around.
 
 ## Status and limits
 
