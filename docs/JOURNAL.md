@@ -309,8 +309,38 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - correction : une conversation sans config emprunte celle de la première conversation du même process qui en a une. L'ordre est : la conversation déjà empruntée, celle du relais, puis les autres de la plus récente à la plus ancienne, 5 au plus. Testé avec le faux serveur, la conversation du relais étant sans config ;
   - `agy:new@rangement-final-2 --workspace "bouquin teck"` : titre posé (`HTTP 200`), livraison `config=True` à 13:07:47, `pong-final-2` reçu à 13:07:54. L'utilisateur la voit sous le workspace « bouquin teck ».
 
+
+## 19. agy CLI sans terminal : `agy -p`
+
+- **`agy --help` (agy 1.4.9)** :
+  - `-p` / `--print` lance une consigne sans interface ; `--conversation <id>` reprend une conversation ;
+  - `--output-format json` renvoie `conversation_id` et `status` ; `--print-timeout` borne le tour ;
+  - `--input-format stream-json` lit une consigne par ligne ;
+  - `remote-control` passe par un service distant : écarté, pour ne rien envoyer hors de la machine.
+- **Le tour perdu au premier message (piste 3)** : la doc intégrée des hooks (`agy-customizations/docs/hooks.md`) ne permet d'injecter que `systemMessage`, `userMessage` et `ephemeralMessage`. Seul `PreToolUse` peut réécrire une commande, et il doit alors trancher pour chaque commande (§5). Chez l'utilisateur (`toolPermission: always-proceed`), le rappel coûte un appel d'outil dans le premier tour, sans demande de permission. Limite gardée et documentée.
+- **Essais à la main** :
+  - `agy -p "… réponds OK" --output-format json` dans `Diaulos` : `{"conversation_id":"9a0af1a2-…","status":"SUCCESS","response":"OK\n"}` en 12 s. `SessionStart`, `PreInvocation` et `Stop` ont tourné : les hooks du pont marchent sans interface ;
+  - `--conversation 9a0af1a2-…` : la session retrouve son contexte (« OK »). Lancée depuis `/tmp`, elle garde son dossier ;
+  - avec l'accord de l'utilisateur, `--conversation 307de9a1-…`, une ancienne conversation démarrée dans un terminal (« Casual Greeting », dans `/home/user`) : `PONG`, `status SUCCESS`.
+- **Index du CLI** : `~/.gemini/antigravity-cli/conversation_summaries.db`, même format que celui de Desktop (41 conversations).
+- **Changements** :
+  - une conversation agy CLI dont le `agy` s'est terminé reste listée, avec `agy CLI, no process: wakes with agy -p`. Les hooks notent `cli` quand ils tournent sous `agy`, et le pont lit l'index du CLI (7 jours par défaut, `--days` / `--all`) ;
+  - un message vers elle lance `bridge.py cli-run <id>`, un seul par conversation. Il attend une seconde pour grouper les messages, lance `agy -p --conversation <id>` dans le dossier de la conversation, et s'arrête quand la boîte est vide. Il ne lance aucun tour si un `agy` tient la conversation. Il se déclare comme relais pendant son travail, pour que les hooks d'`agy -p` n'affichent pas de rappel. Trois échecs mettent le message de côté en `.failed` ;
+  - un relais CLI qui voit `agy` se terminer passe à `cli-run` les messages arrivés trop tard ;
+  - `agy:new-cli` et `agy:new-cli@<nom>` (`--workspace`, sinon le dossier de l'expéditeur) : `bridge.py cli-new` lance `agy -p`, inscrit la conversation (le nom devient un alias `agy:<nom>`) et envoie l'adresse à l'expéditeur après le premier tour ;
+  - jamais `--dangerously-skip-permissions` : ces tours suivent les permissions agy de l'utilisateur.
+- **Tests avec un faux `agy`** (en tête du `PATH`, `HOME` jetable, index CLI de test). Le faux agy note ses arguments et répond `pong` par `bridge.py send` :
+  - `list` montre « Old CLI » endormie, `--all` ajoute « Ancient CLI » (100 jours), et le sous-agent est écarté ;
+  - deux messages envoyés coup sur coup partent en un seul tour, dans le dossier avec espace ; « Ancient CLI » est atteinte par son titre exact ;
+  - `agy:new-cli@builder --workspace …/new` crée la conversation, la note arrive, puis `agy:builder` la reprend avec `--conversation` ;
+  - `agy:new-cli@bad name` et `--workspace` hors `agy:new*` sont refusés.
+- **Validation réelle (13:28–13:29 UTC)**, avec le vrai agy CLI :
+  - `list` montre 8 conversations agy CLI des 7 derniers jours avec `no process`, dont « Casual Greeting » (`307de9a1`) ;
+  - 13:28:2x : message de `claude:Diaulos` à `307de9a1` ; `cli-run` lance `agy -p --conversation` dans `/home/user` ; `pong-cli-sleeping` arrive à 13:28:41 ;
+  - `agy:new-cli@diaulos-cli` dans `Diaulos` : `pong-new-cli` à 13:28:58, puis la note du pont à 13:29:01 avec l'adresse `agy:985a99b1-…` et l'alias ;
+  - agy titre la conversation « Agent Bridge Test Command », mais `agy:diaulos-cli` l'atteint toujours : `pong-alias` à 13:29:17. Environ 15 à 20 s par tour, démarrage d'agy compris.
+
 ## Pistes pour agy CLI (pour plus tard)
 
-- **Créer des sessions CLI** : vérifier si `agy` a un mode non interactif (`agy --help`, par ex. `agy -p "<consigne>"`). Si oui, un `agy:new` côté CLI lancerait un nouveau process `agy` avec la consigne.
-- **Supprimer le tour perdu au premier message** : voir si le hook `PreInvocation` peut glisser l'appel à `ensure-relay` dans le premier prompt sans changer le régime de permissions (l'option `PreToolUse` a été écartée pour cette raison, §5).
-- **Limite actuelle** : une session CLI n'est pas joignable avant son premier message. Aucun hook ne tourne avant, et son language server tourne dans `agy`, sans jeton sur sa ligne de commande.
+- **Le tour perdu au premier message** : pas de solution par les hooks (§19). À revoir si agy ajoute un type d'étape qui lance une commande.
+- **Une session CLI ouverte avant tout message** reste injoignable : la conversation n'existe pas encore.

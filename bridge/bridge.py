@@ -19,6 +19,7 @@ Addresses:
 `agy:<name>` picks an agy conversation by its title (set with /rename);
 `agy:new` starts a new Antigravity Desktop conversation with the message as its first prompt,
 `agy:new@<title>` also names it;
+`agy:new-cli` and `agy:new-cli@<name>` start a new agy CLI conversation (agy -p);
 `<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
 agy sessions can message each other the same way.
 
@@ -33,6 +34,8 @@ Usage:
   bridge.py agy-hook <event>                       agy hook entry point (stdin/stdout JSON)
   bridge.py ensure-relay                           start the relay of this agy process (agy shell only)
   bridge.py agy-relay [--probe TEXT | --inspect]   relay loop / one-off tests (agy shell only)
+  bridge.py cli-run <conversationId>               deliver to a sleeping agy CLI conversation (internal)
+  bridge.py cli-new                                start the conversations asked from agy:new-cli (internal)
 """
 import codecs
 import contextlib
@@ -62,6 +65,10 @@ DISCOVER_SECONDS = 30  # how often a relay asks its language server which conver
 AUTO_SCAN_SECONDS = 10  # auto-relay: how often listing agy peers looks for language servers without a relay
 RECENT_DAYS = 7  # Desktop conversations modified this recently are reachable even when not loaded
 NEW = "agy:new"  # inbox read by Desktop relays: each message there starts a new conversation
+NEW_CLI = "agy:new-cli"  # each message there starts a new agy CLI conversation with agy -p
+CLI_DIR = AGY_DIRS[0]  # agy CLI data: its index of conversations
+CLI_TURN_SECONDS = 1800  # --print-timeout of one headless agy CLI turn
+CLI_ARG_MAX = 100_000  # a message goes to agy -p as one argument: stay under Linux's 128 KiB per argument
 LS_TIMEOUT = 15  # seconds per language-server request
 PEER_STALE_SECONDS = 6 * 3600
 ARCHIVE_DAYS = 30
@@ -264,6 +271,7 @@ def peers(kind=None, days=RECENT_DAYS):
         _auto_relay_scan()
         if days is None or days > RECENT_DAYS:
             _register_index(days)
+        _register_cli_index(days)
     cutoff = None if days is None else time.time() - days * 86400
     found = []
     os.makedirs(_path("peers"), exist_ok=True)
@@ -275,15 +283,18 @@ def peers(kind=None, days=RECENT_DAYS):
                 peer = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        if peer.get("gone") or (cutoff and peer.get("modified", cutoff) < cutoff):
+        # `gone` means its process exited; an agy CLI conversation can still be woken with agy -p.
+        if (peer.get("gone") and not peer.get("cli")) or (cutoff and peer.get("modified", cutoff) < cutoff):
             continue
         if peer.get("conversation"):
-            peer["name"] = _agy_title(peer["conversation"]) or peer.get("title")
+            alias = next((a.split(":", 1)[1] for a in peer.get("aliases", ()) if a.startswith("agy:")), None)
+            peer["name"] = _agy_title(peer["conversation"]) or peer.get("title") or alias
         peer["relay_alive"] = _alive(peer.get("relay_pid"))
         pid = peer.get("pid") or peer.get("agy_pid")
         peer["process_alive"] = _alive(pid) if pid else None
         fresh = time.time() - peer.get("last_seen", 0) < PEER_STALE_SECONDS
-        if peer["relay_alive"] or peer["process_alive"] or (fresh and peer["process_alive"] is None):
+        peer["asleep"] = bool(peer.get("cli")) and not (peer["relay_alive"] or peer["process_alive"])
+        if peer["relay_alive"] or peer["process_alive"] or peer["asleep"] or (fresh and peer["process_alive"] is None):
             found.append(peer)
     return found
 
@@ -316,6 +327,8 @@ def describe(peer):
         how = f"program pid {peer['pid']}: reads with watch"
     elif peer["relay_alive"]:
         how = f"relay pid {peer['relay_pid']}: wakes on message"
+    elif peer.get("asleep"):
+        how = "agy CLI, no process: wakes with agy -p"
     else:
         how = "no relay: reached only while it is working"
     name = f"  \"{peer['name']}\"" if peer.get("name") else ""
@@ -335,6 +348,10 @@ def resolve(to, sender=None):
     kind, sep, rest = to.partition(":") if ":" in to else to.partition("@")
     if kind not in ("agy", "claude", "ext"):
         sys.exit(f"unknown recipient {to!r}")
+    if to == NEW_CLI or to.startswith(NEW_CLI + "@"):
+        if _agy_bin():
+            return NEW_CLI
+        sys.exit(f"{NEW_CLI}: the agy command is not installed or not on PATH")
     if to == NEW or to.startswith(NEW + "@"):
         if any(p["relay_alive"] and _is_language_server(p.get("agy_pid")) for p in peers("agy")):
             return NEW
@@ -370,8 +387,8 @@ def _default_sender():
 def send(to, body, sender, workspace=None):
     """Write a message to the inbox of `to`. For agy:new, `agy:new@<title>` names the new
     conversation and `workspace`, a directory or a Desktop project name, picks where it works."""
-    if workspace and not (to == NEW or to.startswith(NEW + "@")):
-        sys.exit("--workspace only applies to agy:new")
+    if workspace and not any(to == n or to.startswith(n + "@") for n in (NEW, NEW_CLI)):
+        sys.exit("--workspace only applies to agy:new and agy:new-cli")
     address = resolve(to, sender)
     msg = {"id": uuid.uuid4().hex[:12], "from": sender, "to": address, "ts": _now(), "body": body}
     if address == NEW:
@@ -388,6 +405,14 @@ def send(to, body, sender, workspace=None):
                 names = ", ".join(sorted(p["name"] for p in _desktop_projects())) or "none"
                 sys.exit(f"{NEW}: {workspace!r} is neither a directory nor a single Desktop project (projects: {names})")
         msg["new"] = {k: v for k, v in (("title", title[:200]), ("workspace", workspace), ("project", project)) if v}
+    elif address == NEW_CLI:
+        name = to[len(NEW_CLI) + 1:].strip()
+        if name and not ADDRESS_RE.match(f"agy:{name}"):
+            sys.exit(f"{NEW_CLI}@<name>: letters, digits, '.', '_' and '-' only")
+        workspace = os.path.abspath(os.path.expanduser(workspace or os.getcwd()))
+        if not os.path.isdir(workspace):
+            sys.exit(f"{NEW_CLI}: no such directory {workspace!r}")
+        msg["new"] = {k: v for k, v in (("name", name), ("workspace", workspace)) if v}
     name = f"{time.time_ns()}-{msg['id']}.json"
     inbox = _dir("inbox", address)
     tmp = os.path.join(inbox, "." + name + ".tmp")
@@ -400,6 +425,10 @@ def send(to, body, sender, workspace=None):
             _replace(log, log + ".1")  # keep one previous generation
     with open(log, "a", encoding="utf-8") as f:
         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    if address == NEW_CLI:
+        _spawn_detached([sys.executable, "-u", SCRIPT, "cli-new"], "cli-new.log")
+    elif address.startswith("agy:"):
+        _wake_cli(address)
     return msg
 
 
@@ -591,6 +620,7 @@ def agy_hook(event):
     agy_pid = _agy_ancestor()  # hooks run as children of agy (CLI) or of its language server (Desktop, IDE)
     if agy_pid:
         fields["agy_pid"] = agy_pid
+        fields["cli"] = _ancestor("agy") == agy_pid  # an agy CLI conversation can be woken with agy -p later
     if payload.get("workspacePaths"):
         fields["workspace"] = payload["workspacePaths"][0]
     peer = _update_peer(me, **fields)
@@ -950,9 +980,16 @@ def ensure_relay():
 
 def _spawn_relay(cascade, agy_pid, workspace, env=None):
     """Start the relay detached from the calling shell or hook; return its pid."""
+    pid = _spawn_detached([sys.executable, "-u", SCRIPT, "agy-relay", "--agy-pid", str(agy_pid or 0)],
+                          f"relay-{cascade}.log", env)
+    _update_peer(f"agy:{cascade}", conversation=cascade, relay_pid=pid, agy_pid=agy_pid, workspace=workspace)
+    return pid
+
+
+def _spawn_detached(argv, log_name, env=None):
+    """Start `argv` detached from the caller, its output appended to state/<log_name>; return its pid."""
     os.makedirs(_path("state"), exist_ok=True)
-    log = open(_path("state", f"relay-{cascade}.log"), "a", encoding="utf-8")
-    argv = [sys.executable, "-u", SCRIPT, "agy-relay", "--agy-pid", str(agy_pid or 0)]
+    log = open(_path("state", log_name), "a", encoding="utf-8")
     streams = dict(stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env)
     if WINDOWS:
         # Outlive agy's run_command shell: no console, own process group, and out of
@@ -965,7 +1002,6 @@ def _spawn_relay(cascade, agy_pid, workspace, env=None):
             proc = subprocess.Popen(argv, creationflags=flags, **streams)
     else:
         proc = subprocess.Popen(argv, start_new_session=True, **streams)
-    _update_peer(f"agy:{cascade}", conversation=cascade, relay_pid=proc.pid, agy_pid=agy_pid, workspace=workspace)
     return proc.pid
 
 
@@ -1118,6 +1154,8 @@ def agy_relay(args):
     reason, gone = _relay_loop(me, agy_pid)
     for address in _served(me, agy_pid):
         _update_peer(address, relay_pid=None, gone=gone)
+        if gone:
+            _wake_cli(address)  # messages that came too late for an agy CLI that just exited
     print(f"{_now()} relay down: {reason}", flush=True)
 
 
@@ -1419,6 +1457,152 @@ def _relay_inbox(address, inbox, attempts, now, me):
     return "refused"
 
 
+# ---------------------------------------------------------------- agy CLI without a process
+# `agy -p <prompt> --conversation <id>` runs one turn of any agy CLI conversation without
+# a terminal, with the user's own agy settings and permissions. The bridge uses it to
+# deliver to an agy CLI conversation whose process is gone, and to start new ones.
+
+def _agy_bin():
+    """Path of the agy command, or None. Hooks and MCP servers may run with a short PATH."""
+    import shutil
+    found = shutil.which("agy")
+    fallback = os.path.expanduser("~/.local/bin/agy")
+    return found or (fallback if os.access(fallback, os.X_OK) else None)
+
+
+def _register_cli_index(days):
+    """Register the agy CLI conversations of the last `days` (None: all) as sleeping peers.
+
+    A peer already known keeps its pids: an agy CLI that runs it serves it as before.
+    """
+    if not _agy_bin():
+        return
+    for fields in _recent_conversations(CLI_DIR, days):
+        address = f"agy:{fields['conversation']}"
+        peer = _read_peer(address)
+        if peer is None:
+            _update_peer(address, cli=True, **fields)
+        elif not peer.get("cli"):
+            _update_peer(address, cli=True, **{k: v for k, v in fields.items() if k not in peer})
+
+
+def _wake_cli(address):
+    """Start cli-run for `address` if it is a sleeping agy CLI conversation with messages."""
+    peer = _read_peer(address) or {}
+    if (peer.get("cli") and peer.get("conversation") and _pending(address) and _agy_bin()
+            and not _alive(peer.get("relay_pid")) and not _alive(peer.get("agy_pid"))):
+        _spawn_detached([sys.executable, "-u", SCRIPT, "cli-run", peer["conversation"]],
+                        f"cli-{peer['conversation']}.log")
+
+
+def _agy_turn(prompt, workspace, cascade=None):
+    """Run one headless agy CLI turn; return (conversation id, None) or (None, error)."""
+    if len(prompt) > CLI_ARG_MAX:
+        return None, f"message too long for agy -p ({len(prompt)} characters, at most {CLI_ARG_MAX})"
+    argv = [_agy_bin(), "-p", prompt, "--output-format", "json", "--print-timeout", f"{CLI_TURN_SECONDS}s"]
+    if cascade:
+        argv += ["--conversation", cascade]
+    cwd = workspace if workspace and os.path.isdir(workspace) else os.path.expanduser("~")
+    try:
+        proc = subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=CLI_TURN_SECONDS + 60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, repr(e)
+    try:
+        answer = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError):
+        return None, f"exit {proc.returncode}: {(proc.stderr or proc.stdout)[-300:]}"
+    if answer.get("status") != "SUCCESS" or not UUID_RE.match(str(answer.get("conversation_id", ""))):
+        return None, f"status {answer.get('status')}: {str(answer.get('response') or answer)[:300]}"
+    return answer["conversation_id"], None
+
+
+def cli_run(cascade):
+    """Deliver the inbox of a sleeping agy CLI conversation, one agy -p turn per batch, then exit.
+
+    One cli-run per conversation. It stops, leaving messages to the hooks and
+    relay, when an agy CLI opens the conversation meanwhile.
+    """
+    if not UUID_RE.match(cascade):
+        sys.exit(f"invalid conversation id {cascade!r}")
+    me = f"agy:{cascade}"
+    with _locked(_path("state", f"cli-{cascade}"), wait=1.0):
+        peer = _read_peer(me) or {}
+        if _alive(peer.get("relay_pid")) or _alive(peer.get("agy_pid")):
+            return  # served already
+        _update_peer(me, relay_pid=os.getpid())  # the hooks of agy -p then skip the relay reminder
+    failures = {}
+    try:
+        while True:
+            time.sleep(POLL_SECONDS)  # let a burst of messages go in one turn
+            if _alive((_read_peer(me) or {}).get("agy_pid")):
+                return  # an agy CLI opened the conversation: its hooks and relay take over
+            claimed = claim(me)
+            if not claimed:
+                return
+            ids = [m["id"] for _, m in claimed]
+            workspace = (_read_peer(me) or {}).get("workspace")
+            done, error = _agy_turn(_incoming_text([m for _, m in claimed], me), workspace, cascade)
+            if done:
+                print(f"{_now()} delivered {ids} to {me} with agy -p", flush=True)
+                continue
+            for i in ids:
+                failures[i] = failures.get(i, 0) + 1
+            if max(failures[i] for i in ids) < 3:
+                unclaim(me, claimed)
+                print(f"{_now()} not delivered {ids}: {error}; retry in {RELAY_RETRY_SECONDS}s", flush=True)
+                time.sleep(RELAY_RETRY_SECONDS)
+            else:
+                for path, _ in claimed:
+                    with contextlib.suppress(OSError):
+                        os.rename(path, path + ".failed")
+                print(f"{_now()} dropped {ids}: {error}", flush=True)
+    finally:
+        _update_peer(me, relay_pid=None)
+
+
+def cli_new():
+    """Start one agy CLI conversation per message sent to agy:new-cli, then exit."""
+    with _locked(_path("state", "cli-new"), wait=0.5):
+        if _alive((_read_peer(NEW_CLI) or {}).get("pid")):
+            return
+        _update_peer(NEW_CLI, pid=os.getpid(), gone=True)  # never listed: only marks the running worker
+    try:
+        while True:
+            claimed = claim(NEW_CLI, limit=1)
+            if not claimed:
+                return
+            path, msg = claimed[0]
+            options = msg.get("new") if isinstance(msg.get("new"), dict) else {}
+            workspace, name = options.get("workspace"), options.get("name")
+            prompt = _incoming_text([msg], "a new agy conversation; the bridge tells you your address")
+            cascade, error = _agy_turn(prompt, workspace)
+            if not cascade:
+                with contextlib.suppress(OSError):
+                    os.rename(path, path + ".failed")
+                print(f"{_now()} agy:new-cli for {msg['id']} failed: {error}", flush=True)
+                note = f"[bridge, not an agent] Your message {msg['id']} to {NEW_CLI} failed: {error}"
+            else:
+                address = f"agy:{cascade}"
+                fields = {"conversation": cascade, "cli": True, "gone": False, "modified": time.time()}
+                if workspace:
+                    fields["workspace"] = workspace
+                if name:
+                    fields["aliases"] = [f"agy:{name}"]
+                _update_peer(address, **fields)
+                print(f"{_now()} started {address} for {msg['id']} from {msg['from']}", flush=True)
+                named = f", also reachable as agy:{name}" if name else ""
+                note = (f"[bridge, not an agent] Your message {msg['id']} to {NEW_CLI} started the agy CLI "
+                        f"conversation {address}{named}, in {workspace}. It has already run its first turn; "
+                        f"its replies come from that address. Open it in a terminal with: agy --conversation {cascade}")
+            try:
+                send(msg["from"], note, f"agy:{cascade}" if cascade else NEW_CLI)
+            except SystemExit:
+                pass
+    finally:
+        _update_peer(NEW_CLI, pid=None)
+
+
 # ---------------------------------------------------------------- cli
 
 def main(argv):
@@ -1454,6 +1638,10 @@ def main(argv):
         ensure_relay()
     elif cmd == "agy-relay":
         agy_relay(args)
+    elif cmd == "cli-run" and len(args) == 1:
+        cli_run(args[0])
+    elif cmd == "cli-new" and not args:
+        cli_new()
     else:
         sys.exit(__doc__)
 

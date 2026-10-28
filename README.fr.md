@@ -18,7 +18,8 @@ agy (~/projets/api)  ⇄  agy (~/projets/web)  ⇄  Claude Code  ⇄  Claude Cod
 - **Demander un second avis.** Une session agy demande à une autre de relire ses modifications. Lors d'un vrai test, agy a relu le code de ce projet et trouvé trois vrais bugs, corrigés depuis ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Croiser les modèles.** Faites vérifier par Claude Code ce qu'a écrit Gemini, ou l'inverse.
 - **Réveiller un agent inactif.** Inutile de surveiller chaque terminal : à l'arrivée d'un message, la session destinataire reprend la main d'elle-même.
-- **Démarrer une nouvelle session agy depuis un autre agent** (Antigravity Desktop, Linux). `send agy:new "<tâche>"` ouvre une nouvelle conversation Desktop avec cette tâche comme premier prompt, sans ouvrir d'onglet ni rien taper.
+- **Joindre n'importe quelle conversation agy CLI, même si son terminal est fermé.** Le pont lance son tour avec `agy -p --conversation <id>`, dans son dossier, et l'agent répond comme d'habitude.
+- **Démarrer une nouvelle session agy depuis un autre agent.** `send agy:new-cli "<tâche>"` démarre une conversation agy CLI avec cette tâche comme premier prompt ; `send agy:new "<tâche>"` en ouvre une dans Antigravity Desktop (Linux), sans ouvrir d'onglet ni rien taper.
 - **Réveiller un agent depuis n'importe quel programme.** Un script, un job de CI ou un bot rejoint le pont sous `ext:<nom>` : il envoie avec `bridge.py send <agent> - --from ext:<nom>` et lit les réponses de l'agent avec `bridge.py watch ext:<nom> --json`. **Lisez d'abord la section [Sécurité](#sécurité) :** le programme transmet du texte extérieur à un agent capable de lancer des commandes.
 - **Voir passer les messages.** Avec [Paros](https://github.com/Dr1mS/Paros), chaque session agy et Claude Code a un personnage en pixels sur le bureau, et chaque message envoyé par Diaulos vole d'un personnage à l'autre sous forme de lettre.
 
@@ -80,18 +81,44 @@ Dans Claude Code, demandez aussi simplement : *« envoie ça à agy »*. Claude 
 
 > **Windows :** Windows PowerShell ne développe pas `~` dans les arguments passés aux programmes. Écrivez alors `python3 $HOME\.agent-bridge\bridge.py …`. Les commandes suggérées aux agents utilisent le chemin absolu de l'interpréteur Python, précédé de `&` si un chemin contient des espaces (opérateur d'appel de PowerShell 5.1). Rien à faire côté agy : ses hooks lui donnent le chemin absolu.
 
-## Antigravity Desktop
-
-Desktop fait tourner toutes les conversations d'une fenêtre dans un seul processus d'arrière-plan, son language server. Diaulos s'en sert : un seul relais par fenêtre sert toutes ses conversations.
+## agy CLI et Antigravity Desktop
 
 | | agy CLI | Antigravity Desktop |
 |---|---|---|
-| Joignable après son premier message | oui, une fois qu'agy a lancé `ensure-relay` (un rappel le lui demande) | oui, sans `ensure-relay` dès que la fenêtre a un relais |
-| Joignable sans aucun message | non | oui, avec `--auto-relay` : les conversations chargées dans la fenêtre, et celles du client modifiées dans les 7 derniers jours |
-| Onglet fermé, ou conversation pas rouverte depuis le lancement | — | joignable : la livraison la charge depuis le disque, et son tour s'exécute en arrière-plan |
-| Conversations plus anciennes | — | listées avec `list --days N` ou `list --all` (`days` / `all` dans `list_agents`) ; joignables à tout âge par id ou titre exact |
-| Démarrer une nouvelle session depuis un autre agent | non | `send agy:new "<tâche>"`, nommée avec `agy:new@<titre>`, dans un dossier choisi avec `--workspace` (Linux) |
-| Arrêt du relais | quand `agy` se termine | quand le language server de la fenêtre se termine |
+| Ouverte, après son premier message | joignable une fois qu'agy a lancé `ensure-relay` (un rappel le lui demande) | joignable sans `ensure-relay` dès que la fenêtre a un relais |
+| Ouverte, avant tout message | pas joignable : la conversation n'existe pas encore | pas joignable non plus ; les autres conversations de la fenêtre le sont, avec `--auto-relay` |
+| Terminal ou onglet fermé | joignable : chaque lot de messages lance un tour avec `agy -p --conversation <id>` | joignable : la livraison la charge depuis le disque, et son tour s'exécute en arrière-plan |
+| Listées | conversations des 7 derniers jours ; `list --days N` ou `list --all` (`days` / `all` dans `list_agents`) pour les plus anciennes ; tout âge par id ou titre exact | pareil |
+| Démarrer une nouvelle session depuis un autre agent | `send agy:new-cli "<tâche>"`, nommée avec `agy:new-cli@<nom>` | `send agy:new "<tâche>"`, nommée avec `agy:new@<titre>` (Linux) |
+| Relais | un par processus `agy`, arrêté à sa sortie | un par fenêtre, arrêté avec son language server |
+
+### Conversations agy CLI sans terminal
+
+`agy -p "<message>" --conversation <id>` lance un tour d'une conversation agy CLI, sans terminal et avec vos réglages agy habituels. Diaulos s'en sert pour chaque conversation agy CLI dont le `agy` s'est terminé :
+
+- `list` affiche une telle conversation avec `agy CLI, no process: wakes with agy -p`. Le pont les lit dans l'index d'agy, `~/.gemini/antigravity-cli/conversation_summaries.db` (sans les sous-agents ni les conversations tuées).
+- Un message vers elle lance `bridge.py cli-run`, un seul par conversation. Il attend une seconde pour qu'une rafale de messages parte en un seul tour, lance `agy -p` dans le dossier de la conversation, et s'arrête quand la boîte est vide. L'agent répond avec `bridge.py send`, comme dans n'importe quel tour.
+- Si vous rouvrez la conversation avec `agy --conversation <id>`, ses hooks et son relais prennent le relais : `cli-run` ne lance jamais de tour pendant qu'un processus `agy` tient la conversation.
+
+Démarrer une session, par exemple depuis Claude Code :
+
+```bash
+python3 ~/.agent-bridge/bridge.py send agy:new-cli@builder "Compile le projet et envoie les erreurs à claude:api" --workspace ~/projets/api
+# une fois son premier tour fini, le pont vous envoie son adresse, par ex. agy:9a0af1a2-… ; elle est aussi joignable comme agy:builder
+```
+
+Sans `--workspace`, la conversation démarre dans le dossier de l'expéditeur. Le `@<nom>` n'est connu que du pont : agy donne son propre titre à la conversation. Ouvrez la session dans un terminal avec `agy --conversation <id>`.
+
+À savoir :
+
+- Ces tours suivent vos permissions agy. Avec `toolPermission: always-proceed`, ils se déroulent seuls. Avec un réglage qui demande avant certains outils, un tour qui en a besoin attend jusqu'à `--print-timeout` (30 min) puis échoue. Diaulos ne passe jamais `--dangerously-skip-permissions`.
+- Le dossier doit faire partie des workspaces de confiance d'agy (`trustedWorkspaces` dans `~/.gemini/antigravity-cli/settings.json`). Les autres dossiers ne sont pas testés.
+- Chaque tour lance un nouveau processus `agy`, soit environ 10 s avant que le modèle commence à réfléchir.
+- Un message passe à `agy -p` en un seul argument : au-delà de 100 000 caractères, il est refusé et gardé en `.failed`.
+
+## Antigravity Desktop
+
+Desktop fait tourner toutes les conversations d'une fenêtre dans un seul processus d'arrière-plan, son language server. Diaulos s'en sert : un seul relais par fenêtre sert toutes ses conversations.
 
 **Recommandé sous Linux :** `./install.sh --shell --auto-relay`. Dès qu'un agent liste les sessions agy ou écrit à l'une d'elles, Diaulos lance alors tout seul le relais de la fenêtre. Lisez d'abord [Expérimental : relais automatique](#expérimental--relais-automatique) : le pont lit le jeton du language server sur sa ligne de commande.
 
@@ -176,7 +203,7 @@ python3 ~/.agent-bridge/bridge.py agy-relay --inspect         # champs liés au 
 
 ### Livraison
 
-- **Adresses** : `agy:<conversationId>`, `claude:<nom de session>`, `ext:<nom>` pour un programme, joignable tant qu'il lance `watch ext:<nom>` (un seul lecteur par adresse), et `claude` pour la boîte commune lue par `watch`. Une conversation agy est aussi joignable par son titre, `agy:<nom>` (donné avec `/rename` dans agy, affiché par `list_agents`). `agy:new` démarre une nouvelle conversation Antigravity Desktop avec le message comme premier prompt, et `agy:new@<titre>` lui donne aussi un nom (Linux seulement, voir [Antigravity Desktop](#antigravity-desktop)). L'adresse Claude suit `/rename` : la session passe à son nouveau nom en une seconde, ses anciens noms deviennent des alias, et les messages encore en attente sous les anciens noms la suivent. Un envoi vers un `claude:<nom>` inconnu est refusé avec la liste des pairs actifs, évitant la perte silencieuse de messages. Une session ne peut pas s'envoyer de message à elle-même. Les adresses sont strictement validées : les séparateurs de chemin (`/`, `\`) et `..` sont interdits.
+- **Adresses** : `agy:<conversationId>`, `claude:<nom de session>`, `ext:<nom>` pour un programme, joignable tant qu'il lance `watch ext:<nom>` (un seul lecteur par adresse), et `claude` pour la boîte commune lue par `watch`. Une conversation agy est aussi joignable par son titre, `agy:<nom>` (donné avec `/rename` dans agy, affiché par `list_agents`). `agy:new` démarre une nouvelle conversation Antigravity Desktop avec le message comme premier prompt, et `agy:new@<titre>` lui donne aussi un nom (Linux seulement, voir [Antigravity Desktop](#antigravity-desktop)). `agy:new-cli` et `agy:new-cli@<nom>` démarrent une conversation agy CLI (voir [Conversations agy CLI sans terminal](#conversations-agy-cli-sans-terminal)). L'adresse Claude suit `/rename` : la session passe à son nouveau nom en une seconde, ses anciens noms deviennent des alias, et les messages encore en attente sous les anciens noms la suivent. Un envoi vers un `claude:<nom>` inconnu est refusé avec la liste des pairs actifs, évitant la perte silencieuse de messages. Une session ne peut pas s'envoyer de message à elle-même. Les adresses sont strictement validées : les séparateurs de chemin (`/`, `\`) et `..` sont interdits.
 - **Livraison** : chaque message est un fichier JSON, écrit dans un fichier temporaire puis renommé de manière atomique. Un lecteur réserve les messages en les déplaçant dans `archive/` avant de les lire : deux lecteurs n'obtiennent jamais le même message. En cas d'échec de livraison (language server injoignable, erreur HTTP), les messages retournent dans la boîte et le relais retente toutes les 10 s sans planter. Dans le cas rare où le language server accepte un message mais que sa réponse se perd (timeout), le message est renvoyé : la livraison est « au moins une fois », un doublon est possible mais rien n'est perdu. Tout message arrivé pendant qu'un lot attend part avec ce lot en un seul tour.
 - **Réponses** : chaque message porte l'adresse `from` de l'expéditeur. Dans agy, elle est remplie à partir de `ANTIGRAVITY_CONVERSATION_ID`.
 - **Historique et entretien** : `~/.agent-bridge/log.jsonl` garde la trace de chaque envoi et bascule sur `log.jsonl.1` au-delà de 10 Mo. Les archives de plus de 30 jours sont automatiquement purgées.
@@ -211,6 +238,7 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
 | Symptôme | Vérification |
 |---|---|
 | Pas d'écran de confirmation du canal au lancement de `claude` | Le wrapper n'est pas actif dans ce terminal. Ouvrez un nouveau terminal après l'installation, et vérifiez que vous avez utilisé `--shell` / `-Shell`. |
+| Un message à une conversation agy CLI marquée `no process` reste sans réponse | Lisez `~/.agent-bridge/state/cli-<conversationId>.log` (`cli-new.log` pour `agy:new-cli`) : il montre chaque lancement d'`agy -p` et son erreur. |
 | `list` affiche une session agy avec `no relay` | Lisez `~/.agent-bridge/state/relay-<conversationId>.log`. Le relais ne peut être lancé que depuis le shell d'agy : demandez à agy de lancer `bridge.py ensure-relay`. Avec `--auto-relay`, lisez `~/.agent-bridge/state/auto-relay.log`. |
 | agy ne reçoit jamais rien | Relancez agy après l'installation. Les fichiers `~/.agent-bridge/state/last_<événement>_input.json` sont réécrits à chaque passage d'un hook. |
 | Une session Claude n'apparaît pas | Seules les sessions lancées avec le canal sont listées. Vérifiez la commande de lancement, ou utilisez le repli `watch claude`. |
@@ -220,7 +248,7 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
 
 ## Sécurité
 
-- **Pas d'authentification entre processus locaux.** Tout processus lancé par votre compte peut écrire dans `~/.agent-bridge/inbox/`. Avec le relais, écrire à une session agy revient à la faire agir avec les permissions de sa conversation, `always-proceed` par exemple. N'utilisez Diaulos que sur une machine de confiance.
+- **Pas d'authentification entre processus locaux.** Tout processus lancé par votre compte peut écrire dans `~/.agent-bridge/inbox/`. Avec le relais, écrire à une session agy revient à la faire agir avec les permissions de sa conversation, `always-proceed` par exemple. Il en va de même pour une conversation agy CLI dont le terminal est fermé, via `agy -p`, et pour les sessions démarrées par `agy:new` et `agy:new-cli`. N'utilisez Diaulos que sur une machine de confiance.
 - **Un pair n'est pas l'utilisateur.** Les messages reçus sont marqués comme venant d'un agent pair. Les agents savent qu'un tel message ne vaut jamais accord de l'utilisateur, et qu'ils ne doivent jamais faire pour un pair ce que leurs propres permissions ont bloqué.
 - **Expéditeur non vérifié.** L'adresse `from` est déclarée par l'expéditeur et n'est pas vérifiée. Un message qui prétend relayer l'utilisateur ne vaut jamais accord de sa part.
 - **Le jeton CSRF n'est jamais écrit sur disque ni dans les logs.**
@@ -238,7 +266,8 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
 
 - **Expérimental.** Diaulos s'appuie sur une méthode non documentée du language server d'agy (`SendUserCascadeMessage`) et sur les channels de Claude Code, en préversion de recherche. L'un comme l'autre peut changer sans préavis.
 - Chaque relais sert les conversations d'un processus agy (un agy CLI, ou un language server d'Antigravity Desktop ou de l'IDE) et s'arrête quand ce processus se termine.
-- Une session agy CLI n'est pas joignable avant son premier message : agy ne lance aucun hook avant, et son language server tourne dans `agy`, hors de portée du pont.
+- Une session agy CLI n'est pas joignable avant son premier message : la conversation n'existe pas avant. Ensuite, une session ouverte est jointe par son relais, et une session fermée par `agy -p`.
+- Le relais coûte à agy un appel d'outil au premier tour d'une session agy CLI (`ensure-relay`, après le rappel du hook) : un hook peut injecter des messages, pas lancer une commande.
 - `agy:new` et les conversations lues sur disque demandent Antigravity Desktop sous Linux. Une conversation lancée par `agy:new` dans un dossier qui n'est pas un workspace Desktop est rangée parmi les simples conversations.
 - Claude Code affiche un écran de confirmation à chaque lancement tant que la préversion des channels l'exige.
 - Sous Windows, les règles d'autorisation de Claude Code ne couvrent pas l'outil PowerShell : Claude Code peut demander confirmation lors de l'exécution des commandes du pont.
@@ -246,6 +275,7 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
 **Versions testées**
 
 - Linux : Claude Code 2.1.301, agy (language server 1.4.0, Gemini 3.8 Flash). Clients Antigravity validés pour l'échange de messages : agy CLI, Antigravity Desktop et Antigravity IDE. Validés sur une vraie fenêtre Antigravity Desktop : les hooks sous `language_server`, les titres de conversation, le relais partagé, le relais automatique lancé par `list`, le réveil d'une conversation pas chargée depuis le lancement, et `agy:new`. Pas encore vérifié sous Desktop et IDE : le hook `Stop` en écoute. L'IDE devrait se comporter comme Desktop, sans que ce soit vérifié.
+- agy CLI 1.4.9 sous Linux : `agy -p` qui crée une conversation et qui en reprend une, y compris une ancienne conversation démarrée dans un terminal, validé à la main ; `cli-run` (réveil d'une conversation fermée dans son terminal) et `agy:new-cli`, y compris un deuxième message par son `@<nom>`, validés.
 - Windows 11 : Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14. Testés : hooks, réveil d'agy inactif par le relais, réveil d'une session Claude interactive par le canal MCP, messages dans les deux sens.
 
 Le journal complet des expériences, avec chaque essai, message d'erreur et choix de conception, est dans [docs/JOURNAL.md](docs/JOURNAL.md).

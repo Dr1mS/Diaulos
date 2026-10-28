@@ -32,7 +32,9 @@ python3 ~/.agent-bridge/bridge.py send claude:<name> "<text>"
 
 To reply to a message, use its `from` address as the recipient. agy sessions can also message each other.
 
-`agy:new` starts a new Antigravity Desktop conversation, with the message as its first prompt (Linux, needs a Desktop window whose relay runs). `agy:new@<title>` also names it, and `--workspace <dir or Desktop workspace name>` (the `workspace` argument of the MCP `send` tool) picks where it works; a Desktop workspace files it there. `list --days N` / `list --all` (`days` / `all` in `list_agents`) also lists Desktop conversations older than 7 days. The bridge then sends you the new conversation's address, `agy:<conversationId>`, and the conversation's replies come from it.
+`agy:new` starts a new Antigravity Desktop conversation, with the message as its first prompt (Linux, needs a Desktop window whose relay runs). `agy:new@<title>` also names it, and `--workspace <dir or Desktop workspace name>` (the `workspace` argument of the MCP `send` tool) picks where it works; a Desktop workspace files it there. `list --days N` / `list --all` (`days` / `all` in `list_agents`) also lists Desktop and agy CLI conversations older than 7 days. The bridge then sends you the new conversation's address, `agy:<conversationId>`, and the conversation's replies come from it.
+
+`agy:new-cli` and `agy:new-cli@<name>` start a new agy CLI conversation instead, with `agy -p`, in your directory unless `--workspace` says otherwise; the bridge sends you its address once its first turn is done. An agy CLI conversation that `list` shows with `no process` is not lost: a message to it runs `agy -p --conversation <id>` in its directory, one turn per batch of messages.
 
 An `ext:<name>` address is a program connected to the bridge (a bot, a CI job, a script). It is live while it runs `bridge.py watch ext:<name> --json`; reply to it with `send` like to any agent.
 

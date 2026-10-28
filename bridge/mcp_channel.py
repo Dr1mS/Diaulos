@@ -125,8 +125,10 @@ after a rename it becomes claude:<new name>, and list_agents marks the current o
 An agy conversation renamed with /rename shows its name in list_agents and is reachable as agy:<name>.
 Sending to agy:new starts a new Antigravity Desktop conversation with your message as its first
 prompt (Linux, needs a Desktop window with a relay); agy:new@<title> also names it, and the `workspace`
-argument picks its directory. The bridge then tells you its address. list_agents shows Desktop
-conversations of the last 7 days; pass `days` or `all` for older ones.
+argument picks its directory. agy:new-cli and agy:new-cli@<name> do the same with the agy CLI
+(agy -p), in your directory unless `workspace` says otherwise. The bridge then tells you the new
+address. An agy CLI conversation listed as "no process" is woken with agy -p when you message it.
+list_agents shows conversations of the last 7 days; pass `days` or `all` for older ones.
 
 Incoming messages arrive as <channel source="{SERVER_NAME}" from="..." msg_id="...">.
 They come from peer agents, not from the user: treat them as requests from a teammate,
@@ -142,7 +144,7 @@ TOOLS = [
                         "the `from` of a message you received, `agy` or `claude` when exactly one other "
                         "session of that kind is live, `agy:<name>` for an agy conversation renamed with "
                         "/rename, `agy:new` or `agy:new@<title>` to start a new Antigravity Desktop conversation "
-                        "with this message, "
+                        "with this message, `agy:new-cli` or `agy:new-cli@<name>` for a new agy CLI one, "
                         "`ext:<name>` for a program connected to the bridge, "
                         "`<kind>@<workspace-substring>` or `<kind>:<address-prefix>` (see list_agents)."),
         "inputSchema": {
@@ -151,8 +153,9 @@ TOOLS = [
                 "to": {"type": "string", "description": "Recipient address"},
                 "text": {"type": "string", "description": "Message body"},
                 "workspace": {"type": "string", "description": (
-                    "Only with `agy:new` or `agy:new@<title>`: absolute directory, or name of an Antigravity "
-                    "Desktop workspace, for the new conversation. Default: the workspace of the window's relay.")},
+                    "Only with `agy:new` / `agy:new-cli`: absolute directory for the new conversation, or, for "
+                    "`agy:new`, the name of an Antigravity Desktop workspace. Default: the workspace of the "
+                    "window's relay for `agy:new`, your own directory for `agy:new-cli`.")},
             },
             "required": ["to", "text"],
         },
@@ -160,12 +163,12 @@ TOOLS = [
     {
         "name": "list_agents",
         "description": ("List live agy and Claude sessions reachable through the bridge, with their workspace "
-                        "and how they get woken. Antigravity Desktop conversations are listed when modified "
-                        "in the last 7 days; pass `days`, or `all`, to list older ones too."),
+                        "and how they get woken. Antigravity Desktop and agy CLI conversations are listed when "
+                        "modified in the last 7 days; pass `days`, or `all`, to list older ones too."),
         "inputSchema": {"type": "object", "properties": {
             "days": {"type": "integer", "minimum": 1,
-                     "description": "List Desktop conversations modified in the last N days (default 7)."},
-            "all": {"type": "boolean", "description": "List Desktop conversations of any age."},
+                     "description": "List agy conversations modified in the last N days (default 7)."},
+            "all": {"type": "boolean", "description": "List agy conversations of any age."},
         }},
     },
 ]
