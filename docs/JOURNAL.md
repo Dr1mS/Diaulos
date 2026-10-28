@@ -270,3 +270,47 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - 12:13:52 : `send agy:new` depuis `claude:Diaulos`. Le relais crée `agy:e59d7273-…`, et la note de l'adresse arrive aussitôt sur le canal de Claude ;
   - 12:13:56 : consigne livrée (`HTTP 200 config=True`) ;
   - 12:14:03 : `pong-agy-new` reçu de la nouvelle conversation. 11 s de bout en bout, sans onglet ouvert ni message tapé.
+
+## 18. Ancienneté, nom et workspace des nouvelles sessions
+
+- **Demandes de l'utilisateur** :
+  - qu'un agent puisse lister les conversations Desktop aussi loin dans le passé qu'il le veut ;
+  - nommer une session dès sa création ;
+  - choisir son workspace.
+- **Constat de l'utilisateur dans Desktop** : les conversations créées par `StartCascade` apparaissent dans la liste « conversations », avec `friendly-curie` comme dossier de travail. Mais elles ne sont pas rangées sous le workspace. Explication probable : Desktop range une conversation par son `projectId`, et `StartCascade` n'en recevait pas.
+- **Champs lus dans le binaire** :
+  - `StartCascadeRequest.project_id` (champ 9) ;
+  - `UpdateConversationAnnotationsRequest` : `cascade_id`, `annotations` (`title`, `tags`, `archived`, `pinned`…) et `merge_annotations` ;
+  - l'index `conversation_summaries.db` a une colonne `project_id`.
+- **Changements** :
+  - `list --days N` et `list --all`, et `days` / `all` pour `list_agents`. Par défaut, rien ne change : 7 jours. Une conversation plus ancienne est inscrite à la demande, puis cachée du `list` par défaut grâce à sa date de modification ;
+  - un `send` vers un id ou un titre exact trouve une conversation de n'importe quel âge. Un début d'adresse, `agy` seul et `agy@<dossier>` ne visent que les conversations listées ;
+  - `agy:new@<titre>` nomme la conversation par `UpdateConversationAnnotations` ; `--workspace <dossier>` (argument `workspace` de l'outil MCP `send`) choisit son dossier. Le relais passe le `projectId` de la dernière conversation de ce dossier ;
+  - le dossier de données de Desktop vient de `ANTIGRAVITY_APP_DATA_DIR`, que le relais note dans `state/host-<pid>.json`. La ligne de commande du language server, qui contient aussi le jeton, n'est lue qu'avec `--auto-relay`.
+- **Tests avec le faux language server** :
+  - `list` montre 4 conversations, `--days 60` en ajoute une de 30 jours, `--all` une de 400 jours, puis `list` revient à 4 ;
+  - `send agy:Ancient` livre à la conversation de 400 jours ;
+  - `agy:new@Reviewer --workspace "<dossier avec espace>"` : `StartCascade` reçoit `projectId: proj-disk` et l'URI encodée, `UpdateConversationAnnotations` le titre, et `list` affiche « Reviewer » ;
+  - un dossier inexistant et `--workspace` hors `agy:new` sont refusés ;
+  - les scénarios des §15 à §17 passent toujours.
+
+- **Rangement sous le workspace, première tentative ratée (12:52)** : `agy:new@test-rangement --workspace …/dazzling-noether` crée bien la conversation (`pong-rangement` reçu), avec le bon dossier de travail. Mais l'utilisateur la voit dans « conversations », et son `project_id` est vide dans l'index : le `projectId` passé à `StartCascade` est ignoré. La `StartCascadeRequest` réellement servie n'a pas de `project_id` ; elle a `metadata`, `source_metadata` et `project_env_config`.
+- **Enquête de `agy:Diaulos`** (avec ses identifiants, validée par l'utilisateur) :
+  - `metadata.projectId` est ignoré ;
+  - `projectEnvConfig` avec `workspaceUris` : `HTTP 400 cannot specify both workspace URIs and project environment config` ;
+  - `{"source":"CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT","projectEnvConfig":{"projectId":"f80cb04f-…","defaultProjectEnvironment":{}}}` : `HTTP 200`, la réponse contient `projectEnvInfo.workspaceUris`, et `trajectoryMetadata.projectId` comme `project_id` sont renseignés. L'utilisateur voit `test-rangement-2` sous le workspace « bouquin teck » (`dazzling-noether`), et `test-rangement-3` sous `friendly-curie` ;
+  - un projet est un fichier `~/.gemini/config/projects/<id>.json` (`name`, `projectResources.resources[].gitFolder.folderUri`). C'est la conversation qui porte son `projectId` : `UpdateProject` avec `projectConversations` ne range pas une conversation après coup. Cet essai a laissé `bd0dd4c0` dans `projectConversations` du projet `f80cb04f`, sans effet visible.
+- **Changement** : le relais cherche le projet du dossier dans `~/.gemini/config/projects`, sinon par la dernière conversation du dossier. Il passe alors `projectEnvConfig` sans `workspaceUris`. `--workspace` accepte aussi le nom d'un workspace Desktop (« bouquin teck »). Un nom inconnu est refusé avec la liste des projets.
+- **Tests avec le faux language server** (dossier `HOME` jetable pour les projets) : par nom (`--workspace "bouquin test"`), `StartCascade` reçoit `projectEnvConfig` seul, et le dossier vient de `projectEnvInfo` ; un dossier hors projet passe en `workspaceUris` ; un nom inconnu est refusé. Les scénarios des §15 à §17 passent toujours.
+
+- **Validation réelle et dernier défaut (13:05–13:07 UTC)** :
+  - `list --all` montre 7 conversations Desktop au lieu de 5, puis `list` revient à 5 ;
+  - `agy:new@rangement-final --workspace "bouquin teck"` : l'index enregistre `project_id f80cb04f-…` et le dossier `dazzling-noether`. Mais la livraison part avec `config=False` et aucune réponse ne vient. Le relais redémarré avait pour conversation `test-rangement-2`, créée par agy sans aucun prompt, donc sans config à prêter ;
+  - correction : une conversation sans config emprunte celle de la première conversation du même process qui en a une. L'ordre est : la conversation déjà empruntée, celle du relais, puis les autres de la plus récente à la plus ancienne, 5 au plus. Testé avec le faux serveur, la conversation du relais étant sans config ;
+  - `agy:new@rangement-final-2 --workspace "bouquin teck"` : titre posé (`HTTP 200`), livraison `config=True` à 13:07:47, `pong-final-2` reçu à 13:07:54. L'utilisateur la voit sous le workspace « bouquin teck ».
+
+## Pistes pour agy CLI (pour plus tard)
+
+- **Créer des sessions CLI** : vérifier si `agy` a un mode non interactif (`agy --help`, par ex. `agy -p "<consigne>"`). Si oui, un `agy:new` côté CLI lancerait un nouveau process `agy` avec la consigne.
+- **Supprimer le tour perdu au premier message** : voir si le hook `PreInvocation` peut glisser l'appel à `ensure-relay` dans le premier prompt sans changer le régime de permissions (l'option `PreToolUse` a été écartée pour cette raison, §5).
+- **Limite actuelle** : une session CLI n'est pas joignable avant son premier message. Aucun hook ne tourne avant, et son language server tourne dans `agy`, sans jeton sur sa ligne de commande.

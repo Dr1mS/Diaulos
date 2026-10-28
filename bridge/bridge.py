@@ -17,16 +17,19 @@ Addresses:
   ext:<name>        any other program, live while it runs `watch ext:<name>`
 `agy` or `claude` alone picks the only other live session of that kind;
 `agy:<name>` picks an agy conversation by its title (set with /rename);
-`agy:new` starts a new Antigravity Desktop conversation with the message as its first prompt;
+`agy:new` starts a new Antigravity Desktop conversation with the message as its first prompt,
+`agy:new@<title>` also names it;
 `<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
 agy sessions can message each other the same way.
 
 Usage:
-  bridge.py send <to> <message...> [--from ADDR]   message "-" reads stdin
+  bridge.py send <to> <message...> [--from ADDR] [--workspace DIR]
+                                                   message "-" reads stdin; --workspace: for agy:new
   bridge.py recv <address> [--json]                print and archive pending messages
   bridge.py watch <address> [--json]               print one line per new message, forever
                                                    (--json: one JSON object per line)
-  bridge.py list                                   show known agy peers
+  bridge.py list [--days N | --all]                show live agents; Desktop conversations
+                                                   modified in the last N days (default 7)
   bridge.py agy-hook <event>                       agy hook entry point (stdin/stdout JSON)
   bridge.py ensure-relay                           start the relay of this agy process (agy shell only)
   bridge.py agy-relay [--probe TEXT | --inspect]   relay loop / one-off tests (agy shell only)
@@ -48,6 +51,7 @@ HOME = os.path.expanduser(os.environ.get("AGENT_BRIDGE_HOME", "~/.agent-bridge")
 SCRIPT = os.path.abspath(__file__)
 # agy CLI, Antigravity Desktop and Antigravity IDE each keep their data in their own directory.
 AGY_DIRS = [os.path.expanduser(f"~/.gemini/{name}") for name in ("antigravity-cli", "antigravity", "antigravity-ide")]
+PROJECTS_DIR = os.path.expanduser("~/.gemini/config/projects")  # Antigravity Desktop projects: its workspaces
 POLL_SECONDS = 1.0
 LISTEN_MAX_SECONDS = 6 * 3600  # keep below the Stop hook timeout in hooks.json
 RELAY_GRACE_SECONDS = 3  # let a running agy pick the message up through its hooks first
@@ -247,15 +251,20 @@ def _update_peer(address, **fields):
     return peer
 
 
-def peers(kind=None):
+def peers(kind=None, days=RECENT_DAYS):
     """Live peers, optionally only one kind ("agy", "claude" or "ext").
 
     A peer is live while its relay or its own process runs. Without a known
     pid, a peer seen by a hook in the last hours still counts, unless its
-    relay saw it go away (`gone`).
+    relay saw it go away (`gone`). An agy conversation last modified more
+    than `days` ago is left out (None: none is); asking for more than
+    RECENT_DAYS registers the older Desktop conversations first.
     """
     if kind in (None, "agy"):
         _auto_relay_scan()
+        if days is None or days > RECENT_DAYS:
+            _register_index(days)
+    cutoff = None if days is None else time.time() - days * 86400
     found = []
     os.makedirs(_path("peers"), exist_ok=True)
     for name in sorted(os.listdir(_path("peers"))):
@@ -266,7 +275,7 @@ def peers(kind=None):
                 peer = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        if peer.get("gone"):
+        if peer.get("gone") or (cutoff and peer.get("modified", cutoff) < cutoff):
             continue
         if peer.get("conversation"):
             peer["name"] = _agy_title(peer["conversation"]) or peer.get("title")
@@ -326,14 +335,16 @@ def resolve(to, sender=None):
     kind, sep, rest = to.partition(":") if ":" in to else to.partition("@")
     if kind not in ("agy", "claude", "ext"):
         sys.exit(f"unknown recipient {to!r}")
-    if to == NEW:
+    if to == NEW or to.startswith(NEW + "@"):
         if any(p["relay_alive"] and _is_language_server(p.get("agy_pid")) for p in peers("agy")):
-            return to
+            return NEW
         sys.exit(f"{NEW}: no Antigravity Desktop window with a running relay (Linux only)")
     candidates = [p for p in peers(kind) if p["address"] != sender]
     if sep == ":":
-        exact = [p for p in candidates if p["address"] == to or to in p.get("aliases", ())]
-        named = [p for p in candidates if p.get("name") == rest]
+        # An exact address or title reaches a conversation of any age; a prefix only a listed one.
+        every = [p for p in peers(kind, days=None) if p["address"] != sender] if kind == "agy" else candidates
+        exact = [p for p in every if p["address"] == to or to in p.get("aliases", ())]
+        named = [p for p in every if p.get("name") == rest]
         candidates = exact or named or [p for p in candidates if p["address"].startswith(to)]
     elif sep == "@":
         candidates = [p for p in candidates if rest in p.get("workspace", "")]
@@ -356,9 +367,27 @@ def _default_sender():
 
 # ---------------------------------------------------------------- mailbox
 
-def send(to, body, sender):
+def send(to, body, sender, workspace=None):
+    """Write a message to the inbox of `to`. For agy:new, `agy:new@<title>` names the new
+    conversation and `workspace`, a directory or a Desktop project name, picks where it works."""
+    if workspace and not (to == NEW or to.startswith(NEW + "@")):
+        sys.exit("--workspace only applies to agy:new")
     address = resolve(to, sender)
     msg = {"id": uuid.uuid4().hex[:12], "from": sender, "to": address, "ts": _now(), "body": body}
+    if address == NEW:
+        title = to[len(NEW) + 1:].strip()
+        project = None
+        if workspace:
+            path = os.path.abspath(os.path.expanduser(workspace))
+            named = [p for p in _desktop_projects() if p["name"].casefold() == workspace.casefold()]
+            if os.path.isdir(path):
+                workspace = path
+            elif len(named) == 1:
+                project, workspace = named[0]["id"], named[0]["folders"][0]
+            else:
+                names = ", ".join(sorted(p["name"] for p in _desktop_projects())) or "none"
+                sys.exit(f"{NEW}: {workspace!r} is neither a directory nor a single Desktop project (projects: {names})")
+        msg["new"] = {k: v for k, v in (("title", title[:200]), ("workspace", workspace), ("project", project)) if v}
     name = f"{time.time_ns()}-{msg['id']}.json"
     inbox = _dir("inbox", address)
     tmp = os.path.join(inbox, "." + name + ".tmp")
@@ -558,7 +587,7 @@ def agy_hook(event):
         print("{}")
         return
     me = f"agy:{conversation}"
-    fields = {"conversation": conversation, "gone": False}  # a hook proves the conversation is back
+    fields = {"conversation": conversation, "gone": False, "modified": time.time()}  # a hook proves it is in use
     agy_pid = _agy_ancestor()  # hooks run as children of agy (CLI) or of its language server (Desktop, IDE)
     if agy_pid:
         fields["agy_pid"] = agy_pid
@@ -688,23 +717,30 @@ def _last_user_config_from(trajectory):
     return None
 
 
-def _deliver(cascade, text, fallback=None):
+_donor = []  # relay only: the conversation whose config was last borrowed
+
+
+def _deliver(cascade, text, fallback=()):
     """(HTTP status, response, cascadeConfig copied). Only 200 means delivered.
 
     Status None: the language server is unreachable. 599: it was reachable
     but gave no answer to SendUserCascadeMessage. A conversation that has
-    no prompt yet (made by StartCascade) borrows the config of `fallback`.
-    GetCascadeTrajectory also loads a conversation the server had not
-    loaded yet, from disk.
+    no prompt yet (made by StartCascade) borrows the config of the first
+    conversation in `fallback` that has one. GetCascadeTrajectory also loads
+    a conversation the server had not loaded yet, from disk.
     """
     status, resp = _ls_call("GetCascadeTrajectory", {"cascadeId": cascade})
     if status != 200:
         # Without the config agy fails with "plan model not specified": retry later.
         return status, f"GetCascadeTrajectory: {resp[:200]}", False
     config = _last_user_config_from(resp)
-    if not config and fallback and fallback != cascade:
-        status, resp = _ls_call("GetCascadeTrajectory", {"cascadeId": fallback})
+    donors = [d for d in dict.fromkeys(_donor + list(fallback)) if d != cascade]
+    for donor in donors[:5] if not config else []:  # each answer can weigh a megabyte
+        status, resp = _ls_call("GetCascadeTrajectory", {"cascadeId": donor})
         config = _last_user_config_from(resp) if status == 200 else None
+        if config:
+            _donor[:] = [donor]
+            break
     body = {"cascadeId": cascade, "items": [{"text": text}]}
     if config:
         body["cascadeConfig"] = config
@@ -734,21 +770,33 @@ def _is_language_server(pid):
         return False
 
 
+def _data_dir_path(name):
+    return name if os.path.isabs(name) else os.path.expanduser(f"~/.gemini/{name}")
+
+
 def _ls_data_dir(pid):
-    """Data directory of the language server `pid` (from --app_data_dir), or None."""
+    """Data directory of the language server `pid`, or None.
+
+    Its relay records it from ANTIGRAVITY_APP_DATA_DIR. Only the auto-relay
+    reads it from the server's command line, which also holds the token.
+    """
     if not _is_language_server(pid):
+        return None
+    with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+        with open(_path("state", f"host-{pid}.json"), encoding="utf-8") as f:
+            return json.load(f)["data_dir"]
+    if not _auto_relay_enabled():
         return None
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             args = f.read().decode("utf-8", "replace").split("\0")
-        name = args[args.index("--app_data_dir") + 1]
+        return _data_dir_path(args[args.index("--app_data_dir") + 1])
     except (OSError, ValueError, IndexError):
         return None
-    return name if os.path.isabs(name) else os.path.expanduser(f"~/.gemini/{name}")
 
 
-def _recent_conversations(data_dir):
-    """[(id, title, workspace)] of the client's own conversations modified in the last RECENT_DAYS.
+def _recent_conversations(data_dir, days=RECENT_DAYS):
+    """[peer fields] of the client's own conversations modified in the last `days` (None: all).
 
     Read from its conversation_summaries.db, which also indexes agy CLI
     conversations: those belong to a CLI process and are left out, with
@@ -759,11 +807,13 @@ def _recent_conversations(data_dir):
     db = os.path.join(data_dir, "conversation_summaries.db")
     if not os.path.exists(db):
         return []
-    cutoff = datetime.fromtimestamp(time.time() - RECENT_DAYS * 86400, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    since = time.time() - days * 86400 if days is not None else 0
+    cutoff = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     try:
         with contextlib.closing(sqlite3.connect(f"file:{urllib.parse.quote(db)}?mode=ro", uri=True, timeout=2)) as con:
             rows = con.execute(
-                "SELECT conversation_id, title, workspace_uris FROM conversation_summaries"
+                "SELECT conversation_id, title, workspace_uris, project_id, last_modified_time"
+                " FROM conversation_summaries"
                 " WHERE last_modified_time >= ? AND coalesce(source, '') != 'CORTEX_TRAJECTORY_SOURCE_CLI'"
                 " AND cast(coalesce(killed, 0) AS integer) = 0 AND cast(coalesce(nesting_depth, 0) AS integer) = 0"
                 " ORDER BY last_modified_time DESC",
@@ -771,7 +821,7 @@ def _recent_conversations(data_dir):
     except sqlite3.Error:
         return []
     found = []
-    for cascade, title, uris in rows:
+    for cascade, title, uris, project, modified in rows:
         if not UUID_RE.match(cascade or ""):
             continue
         with contextlib.suppress(OSError), open(os.path.join(data_dir, "annotations", f"{cascade}.pbtxt"), "rb") as f:
@@ -781,9 +831,50 @@ def _recent_conversations(data_dir):
             uri = next(iter(json.loads(uris or "[]")), "")
         except (json.JSONDecodeError, TypeError):
             uri = ""
-        workspace = urllib.parse.unquote(uri[len("file://"):]) if uri.startswith("file://") else None
-        found.append((cascade, title or None, workspace))
+        fields = {"conversation": cascade, "title": title or None, "project": project or None,
+                  "workspace": urllib.parse.unquote(uri[len("file://"):]) if uri.startswith("file://") else None,
+                  "modified": _epoch(modified)}
+        found.append({k: v for k, v in fields.items() if v})
     return found
+
+
+def _epoch(stamp):
+    """Seconds since the epoch for an Antigravity time ("2026-10-28 11:32:10.39+00:00" or ISO with Z), or None."""
+    m = re.match(r"(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d)", stamp or "")
+    if not m:
+        return None
+    return datetime.strptime(" ".join(m.groups()), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+
+
+def _language_servers():
+    """Pids of this user's Antigravity Desktop or IDE language servers (Linux only)."""
+    if WINDOWS:
+        return []
+    found = []
+    for name in os.listdir("/proc"):
+        try:
+            pid = int(name)
+            if os.stat(f"/proc/{pid}").st_uid == os.getuid() and _is_language_server(pid):
+                found.append(pid)
+        except (ValueError, OSError):
+            continue
+    return found
+
+
+def _register_index(days):
+    """Register the Desktop conversations of the last `days` (None: all) of each running window.
+
+    The relay of the window then serves them, and loads each one from disk
+    when a message comes. Listing with more days, or sending to an exact id
+    or title, reaches conversations older than RECENT_DAYS this way.
+    """
+    for pid in _language_servers():
+        data_dir = _ls_data_dir(pid)
+        relay = _host_relay(pid) if data_dir else None  # the relay adopts them within a second anyway
+        for fields in _recent_conversations(data_dir, days) if data_dir else []:
+            address = f"agy:{fields['conversation']}"
+            if (_read_peer(address) or {}).get("agy_pid") != pid:
+                _update_peer(address, agy_pid=pid, gone=False, **fields, **({"relay_pid": relay} if relay else {}))
 
 
 def _host_peers(agy_pid):
@@ -944,6 +1035,9 @@ def _auto_relay(me, agy_pid):
 def _spawn_auto_relay(cascade, agy_pid, creds):
     env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS=creds[0], ANTIGRAVITY_CSRF_TOKEN=creds[1],
                ANTIGRAVITY_CONVERSATION_ID=cascade)
+    data_dir = _ls_data_dir(agy_pid)
+    if data_dir:
+        env["ANTIGRAVITY_APP_DATA_DIR"] = data_dir
     workspace = (_read_peer(f"agy:{cascade}") or {}).get("workspace") or os.getcwd()
     pid = _spawn_relay(cascade, agy_pid, workspace, env=env)
     _auto_relay_log(f"agy:{cascade}: relay pid {pid} started on {creds[0]}")
@@ -968,16 +1062,7 @@ def _auto_relay_scan():
             return
     with contextlib.suppress(OSError), open(stamp, "w"):
         pass
-    for name in os.listdir("/proc"):
-        try:
-            pid = int(name)
-            if os.stat(f"/proc/{pid}").st_uid != os.getuid():
-                continue
-            with open(f"/proc/{pid}/comm") as f:
-                if f.read().strip() != "language_server":
-                    continue
-        except (ValueError, OSError):
-            continue
+    for pid in _language_servers():
         with _host_lock(pid):
             if _host_relay(pid):
                 continue
@@ -1025,6 +1110,9 @@ def agy_relay(args):
 
     agy_pid = int(args[1]) if args[:1] == ["--agy-pid"] and len(args) > 1 else _agy_ancestor()
     agy_pid = agy_pid or None
+    if _is_language_server(agy_pid) and os.environ.get("ANTIGRAVITY_APP_DATA_DIR"):
+        with open(_path("state", f"host-{agy_pid}.json"), "w", encoding="utf-8") as f:
+            json.dump({"data_dir": _data_dir_path(os.environ["ANTIGRAVITY_APP_DATA_DIR"])}, f)
     _update_peer(me, conversation=cascade, relay_pid=os.getpid(), agy_pid=agy_pid, gone=False)
     print(f"{_now()} relay up pid={os.getpid()} agy={agy_pid} address={me}", flush=True)
     reason, gone = _relay_loop(me, agy_pid)
@@ -1071,6 +1159,12 @@ def _discover(agy_pid, creds=None):
         title = (info.get("annotations") or {}).get("title") or info.get("summary")
         if isinstance(title, str) and title:
             fields["title"] = title  # the server's copy, for a conversation whose annotations file is elsewhere
+        project = (info.get("trajectoryMetadata") or {}).get("projectId")
+        if isinstance(project, str) and project:
+            fields["project"] = project
+        modified = _epoch(info.get("lastModifiedTime") if isinstance(info.get("lastModifiedTime"), str) else None)
+        if modified:
+            fields["modified"] = modified
         uri = next((w.get("workspaceFolderAbsoluteUri") for w in info.get("workspaces") or []
                     if isinstance(w, dict)), "")
         if uri.startswith("file://"):
@@ -1080,12 +1174,10 @@ def _discover(agy_pid, creds=None):
     answer = f"GetAllCascadeTrajectories HTTP {status}: {len(found)} loaded, {archived} archived"
     data_dir = _ls_data_dir(agy_pid) if status == 200 else None
     if data_dir:  # Desktop: conversations on disk are reachable too, the relay loads them on delivery
-        recent = [c for c in _recent_conversations(data_dir) if c[0] not in summaries]
-        for cascade, title, workspace in recent:
-            fields = {"conversation": cascade, "agy_pid": agy_pid, "gone": False}
-            fields.update({k: v for k, v in (("title", title), ("workspace", workspace)) if v})
-            _update_peer(f"agy:{cascade}", **fields)
-            found.append(cascade)
+        recent = [c for c in _recent_conversations(data_dir) if c["conversation"] not in summaries]
+        for fields in recent:
+            _update_peer(f"agy:{fields['conversation']}", agy_pid=agy_pid, gone=False, **fields)
+            found.append(fields["conversation"])
         answer += f", {len(recent)} recent on disk"
     return found, answer
 
@@ -1147,6 +1239,51 @@ def _relay_loop(me, agy_pid):
         return f"error {e!r}", False
 
 
+def _desktop_projects():
+    """[{"id", "name", "folders"}] of the Antigravity Desktop projects, from their definition files."""
+    import urllib.parse
+    try:
+        names = sorted(os.listdir(PROJECTS_DIR))
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        if not name.endswith(".json") or name == "default-cli-project.json":
+            continue
+        try:
+            with open(os.path.join(PROJECTS_DIR, name), encoding="utf-8") as f:
+                project = json.load(f)
+            resources = (project.get("projectResources") or {}).get("resources") or []
+        except (OSError, json.JSONDecodeError, AttributeError):
+            continue
+        folders = [urllib.parse.unquote(v["folderUri"][len("file://"):])
+                   for r in resources if isinstance(r, dict) for v in r.values()
+                   if isinstance(v, dict) and str(v.get("folderUri", "")).startswith("file://")]
+        if isinstance(project.get("id"), str) and folders:
+            found.append({"id": project["id"], "name": str(project.get("name") or project["id"]), "folders": folders})
+    return found
+
+
+def _project_of(workspace, agy_pid):
+    """Desktop project id of `workspace`, or None: the project that holds that folder, else
+    the project of the workspace's most recently modified conversation."""
+    for project in _desktop_projects() if workspace else []:
+        if any(os.path.normpath(f) == os.path.normpath(workspace) for f in project["folders"]):
+            return project["id"]
+    best = None
+    for peer in _host_peers(agy_pid) if workspace else []:
+        if peer.get("workspace") == workspace and peer.get("project"):
+            if best is None or peer.get("modified", 0) > best.get("modified", 0):
+                best = peer
+    if best:
+        return best["project"]
+    data_dir = _ls_data_dir(agy_pid)
+    for fields in _recent_conversations(data_dir, None) if data_dir and workspace else []:
+        if fields.get("workspace") == workspace and fields.get("project"):
+            return fields["project"]  # newest first
+    return None
+
+
 def _relay_new(me, agy_pid, inbox):
     """Start a Desktop conversation for the oldest message sent to agy:new; True if one was handled.
 
@@ -1162,15 +1299,25 @@ def _relay_new(me, agy_pid, inbox):
     if not claimed:
         return False
     path, msg = claimed[0]
-    workspace = (_read_peer(me) or {}).get("workspace")
+    options = msg.get("new") if isinstance(msg.get("new"), dict) else {}
+    workspace = options.get("workspace") or (_read_peer(me) or {}).get("workspace")
+    project = options.get("project") or _project_of(workspace, agy_pid)
     body = {"source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT"}
-    if workspace:
+    if project:
+        # Files the conversation under its workspace in Desktop, which then takes its folder from
+        # the project. The server refuses workspaceUris together with projectEnvConfig.
+        body["projectEnvConfig"] = {"projectId": project, "defaultProjectEnvironment": {}}
+    elif workspace:
         body["workspaceUris"] = ["file://" + urllib.parse.quote(workspace)]
     status, resp = _ls_call("StartCascade", body)
     cascade = None
     if status == 200:
         with contextlib.suppress(json.JSONDecodeError, AttributeError):
-            cascade = json.loads(resp).get("cascadeId")
+            answer = json.loads(resp)
+            cascade = answer.get("cascadeId")
+            uris = (answer.get("projectEnvInfo") or {}).get("workspaceUris") or []
+            if uris and str(uris[0]).startswith("file://"):
+                workspace = urllib.parse.unquote(uris[0][len("file://"):])
     if not (cascade and UUID_RE.match(cascade)):
         if status is None or status >= 500:
             unclaim(NEW, claimed)
@@ -1183,8 +1330,16 @@ def _relay_new(me, agy_pid, inbox):
                   f"kept as {os.path.basename(path)}.failed", flush=True)
         return True
     address = f"agy:{cascade}"
+    fields = {k: v for k, v in (("workspace", workspace), ("project", project)) if v}
+    title = options.get("title")
+    if title:
+        status, resp = _ls_call("UpdateConversationAnnotations", {
+            "cascadeId": cascade, "annotations": {"title": title}, "mergeAnnotations": True})
+        print(f"{_now()} title {title!r} for {address}: HTTP {status} {resp[:200]}", flush=True)
+        if status == 200:
+            fields["title"] = title
     _update_peer(address, conversation=cascade, agy_pid=agy_pid, relay_pid=os.getpid(), gone=False,
-                 **({"workspace": workspace} if workspace else {}))
+                 modified=time.time(), **fields)
     msg["to"] = address
     inbox_dir, name = _dir("inbox", address), os.path.basename(path)
     tmp = os.path.join(inbox_dir, "." + name + ".tmp")
@@ -1195,11 +1350,21 @@ def _relay_new(me, agy_pid, inbox):
         os.remove(path)
     print(f"{_now()} started {address} for {msg['id']} from {msg['from']}", flush=True)
     try:  # tell the sender where its message went; a sender that is gone just misses it
+        named = f" \"{fields['title']}\" (reachable as agy:{fields['title']})" if fields.get("title") else ""
         send(msg["from"], f"[bridge relay, not an agent] Your message {msg['id']} to {NEW} started "
-             f"the agy conversation {address}. Its replies come from that address.", address)
+             f"the agy conversation {address}{named}, in {workspace or 'no workspace'}. "
+             "Its replies come from that address.", address)
     except SystemExit:
         pass
     return True
+
+
+def _donors(me):
+    """Conversations a new conversation can borrow its config from: the relay's own, then the
+    other conversations of its agy process, most recently modified first."""
+    agy_pid = (_read_peer(me) or {}).get("agy_pid")
+    others = sorted(_host_peers(agy_pid), key=lambda p: -p.get("modified", 0)) if agy_pid else []
+    return [me.split(":", 1)[1]] + [p["conversation"] for p in others]
 
 
 def _relay_inbox(address, inbox, attempts, now, me):
@@ -1215,7 +1380,7 @@ def _relay_inbox(address, inbox, attempts, now, me):
         return None
     ids = [m["id"] for _, m in claimed]
     status, body, with_config = _deliver(address.split(":", 1)[1], _incoming_text([m for _, m in claimed], address),
-                                         fallback=me.split(":", 1)[1])
+                                         fallback=_donors(me))
     if status == 200:
         inbox["solo"] = False
         for i in ids:
@@ -1262,21 +1427,26 @@ def main(argv):
         sys.exit(__doc__)
     cmd, args = argv[1], argv[2:]
     if cmd == "send" and len(args) >= 2:
-        sender = _default_sender()
-        if len(args) >= 4 and args[-2] == "--from":  # only as the last two arguments; elsewhere it is text
-            sender, args = args[-1], args[:-2]
+        sender, workspace = _default_sender(), None
+        while len(args) >= 4 and args[-2] in ("--from", "--workspace"):  # only as the last arguments; elsewhere it is text
+            if args[-2] == "--from":
+                sender = args[-1]
+            else:
+                workspace = args[-1]
+            args = args[:-2]
         to, body = args[0], " ".join(args[1:])
         if body == "-":
             body = sys.stdin.read()
-        msg = send(to, body, sender)
+        msg = send(to, body, sender, workspace)
         print(f"sent {msg['id']} to {msg['to']}")
     elif cmd == "recv" and len(args) in (1, 2) and args[1:] in ([], ["--json"]):
         for m in take(args[0]):
             print(json.dumps(m, ensure_ascii=False) if args[1:] else fmt(m))
     elif cmd == "watch" and len(args) in (1, 2) and args[1:] in ([], ["--json"]):
         watch(args[0], bool(args[1:]))
-    elif cmd == "list":
-        for p in peers():
+    elif cmd == "list" and (args in ([], ["--all"]) or (args[:1] == ["--days"] and len(args) == 2 and args[1].isdigit())):
+        days = None if args == ["--all"] else int(args[1]) if args else RECENT_DAYS
+        for p in peers(days=days):
             print(describe(p))
     elif cmd == "agy-hook" and len(args) == 1:
         agy_hook(args[0])

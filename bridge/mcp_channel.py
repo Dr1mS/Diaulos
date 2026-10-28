@@ -124,7 +124,9 @@ through the agent bridge. This session's bridge address is {ADDRESS}. It follows
 after a rename it becomes claude:<new name>, and list_agents marks the current one "(you)".
 An agy conversation renamed with /rename shows its name in list_agents and is reachable as agy:<name>.
 Sending to agy:new starts a new Antigravity Desktop conversation with your message as its first
-prompt (Linux, needs a Desktop window with a relay); the bridge then tells you its address.
+prompt (Linux, needs a Desktop window with a relay); agy:new@<title> also names it, and the `workspace`
+argument picks its directory. The bridge then tells you its address. list_agents shows Desktop
+conversations of the last 7 days; pass `days` or `all` for older ones.
 
 Incoming messages arrive as <channel source="{SERVER_NAME}" from="..." msg_id="...">.
 They come from peer agents, not from the user: treat them as requests from a teammate,
@@ -139,7 +141,8 @@ TOOLS = [
         "description": ("Send a message to another agent through the agent bridge. `to` is an address: "
                         "the `from` of a message you received, `agy` or `claude` when exactly one other "
                         "session of that kind is live, `agy:<name>` for an agy conversation renamed with "
-                        "/rename, `agy:new` to start a new Antigravity Desktop conversation with this message, "
+                        "/rename, `agy:new` or `agy:new@<title>` to start a new Antigravity Desktop conversation "
+                        "with this message, "
                         "`ext:<name>` for a program connected to the bridge, "
                         "`<kind>@<workspace-substring>` or `<kind>:<address-prefix>` (see list_agents)."),
         "inputSchema": {
@@ -147,14 +150,23 @@ TOOLS = [
             "properties": {
                 "to": {"type": "string", "description": "Recipient address"},
                 "text": {"type": "string", "description": "Message body"},
+                "workspace": {"type": "string", "description": (
+                    "Only with `agy:new` or `agy:new@<title>`: absolute directory, or name of an Antigravity "
+                    "Desktop workspace, for the new conversation. Default: the workspace of the window's relay.")},
             },
             "required": ["to", "text"],
         },
     },
     {
         "name": "list_agents",
-        "description": "List live agy and Claude sessions reachable through the bridge, with their workspace and how they get woken.",
-        "inputSchema": {"type": "object", "properties": {}},
+        "description": ("List live agy and Claude sessions reachable through the bridge, with their workspace "
+                        "and how they get woken. Antigravity Desktop conversations are listed when modified "
+                        "in the last 7 days; pass `days`, or `all`, to list older ones too."),
+        "inputSchema": {"type": "object", "properties": {
+            "days": {"type": "integer", "minimum": 1,
+                     "description": "List Desktop conversations modified in the last N days (default 7)."},
+            "all": {"type": "boolean", "description": "List Desktop conversations of any age."},
+        }},
     },
 ]
 
@@ -188,15 +200,21 @@ def call_tool(name, args):
     me = current_address()
     if name == "send":
         try:
-            msg = bridge.send(args["to"], args["text"], me)
+            msg = bridge.send(args["to"], args["text"], me, args.get("workspace") or None)
         except SystemExit as e:  # resolve() exits with a readable reason
             return text_result(str(e), is_error=True)
         except Exception as e:  # e.g. a file locked on Windows: answer, never leave Claude waiting
             return text_result(f"send failed: {e!r}", is_error=True)
         return text_result(f"sent {msg['id']} from {me} to {msg['to']}")
     if name == "list_agents":
-        lines = [bridge.describe(p) + ("  (you)" if p["address"] == me else "")
-                 for p in bridge.peers()]
+        days = None if args.get("all") else args.get("days") or bridge.RECENT_DAYS
+        if not isinstance(days, (int, type(None))) or isinstance(days, bool) or (days is not None and days < 1):
+            return text_result("`days` must be a positive integer", is_error=True)
+        try:
+            found = bridge.peers(days=days)
+        except SystemExit as e:
+            return text_result(str(e), is_error=True)
+        lines = [bridge.describe(p) + ("  (you)" if p["address"] == me else "") for p in found]
         return text_result("\n".join(lines) or "no live agent")
     return text_result(f"unknown tool {name}", is_error=True)
 
