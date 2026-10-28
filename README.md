@@ -6,9 +6,9 @@
 
 > In the ancient Greek games, the *diaulos* was the out-and-back race: run to the far end of the stadium, turn, and run back. Here it is the trip a message makes from one agent to another and back.
 
-**Diaulos lets agy sessions talk to each other.** agy (Google Antigravity) has no way for one session to reach another: every conversation is an island. With Diaulos, any agy session can message any other one, and the message **wakes the receiver even when it is idle**, or even when its terminal is closed. The sessions can run in any directory, and you don't have to copy-paste between terminals.
+**Diaulos lets AI coding agents talk to each other: Claude Code sessions and agy (Google Antigravity) sessions, in any direction.** Claude to Claude, agy to agy, Claude to agy and back. Out of the box, an agy session cannot reach another one, and neither tool can reach the other. With Diaulos, any session can message any other one, and the message **wakes the receiver even when it is idle**, or even when its terminal is closed. The sessions can run in any directory, and you don't have to copy-paste between terminals.
 
-It works with the agy CLI and with **Antigravity Desktop**, and it also connects **Claude Code** sessions, so Gemini and Claude agents can work together. Any number of sessions of either kind can join, on Linux and on Windows.
+It works with **Claude Code**, the **agy CLI** and **Antigravity Desktop**, so Claude and Gemini agents can work together. Any number of sessions of each kind can join, on Linux and on Windows.
 
 ```
 agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Antigravity Desktop  ⇄  Claude Code

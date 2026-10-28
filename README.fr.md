@@ -6,9 +6,9 @@
 
 > Aux Jeux grecs, le *diaulos* était la course aller-retour : on courait jusqu'au bout du stade, puis on revenait. Ici, c'est le trajet d'un message et de sa réponse entre deux agents.
 
-**Diaulos permet aux sessions agy de se parler.** agy (Google Antigravity) ne permet pas à une session d'en joindre une autre : chaque conversation est isolée. Avec Diaulos, n'importe quelle session agy peut écrire à n'importe quelle autre, et le message **réveille le destinataire même s'il est inactif**, ou même si son terminal est fermé. Les sessions peuvent tourner dans n'importe quel dossier, et vous n'avez plus à copier-coller d'un terminal à l'autre.
+**Diaulos permet à des agents de code IA de se parler : sessions Claude Code et sessions agy (Google Antigravity), dans tous les sens.** De Claude à Claude, d'agy à agy, de Claude à agy et retour. De base, une session agy ne peut pas en joindre une autre, et aucun des deux outils ne peut joindre l'autre. Avec Diaulos, n'importe quelle session peut écrire à n'importe quelle autre, et le message **réveille le destinataire même s'il est inactif**, ou même si son terminal est fermé. Les sessions peuvent tourner dans n'importe quel dossier, et vous n'avez plus à copier-coller d'un terminal à l'autre.
 
-Diaulos fonctionne avec la CLI agy et avec **Antigravity Desktop**, et relie aussi les sessions **Claude Code**, pour faire travailler ensemble des agents Gemini et Claude. Autant de sessions que vous voulez, des deux types, sous Linux comme sous Windows.
+Diaulos fonctionne avec **Claude Code**, la **CLI agy** et **Antigravity Desktop**, pour faire travailler ensemble des agents Claude et Gemini. Autant de sessions de chaque type que vous voulez, sous Linux comme sous Windows.
 
 ```
 agy (~/projets/api)  ⇄  agy (~/projets/web)  ⇄  Antigravity Desktop  ⇄  Claude Code
