@@ -5,7 +5,21 @@
 #   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill
 #   ~/.claude/settings.json              allow rule for bridge commands
 # Re-run it to update. Each config file it edits is backed up first as <file>.bak-agent-bridge.
+# Options:
+#   --shell       a plain `claude` starts with the MCP channel (~/.bashrc)
+#   --auto-relay  experimental: agy hooks start the relay of Antigravity Desktop/IDE
+#                 themselves. Re-run without it to turn it off.
 set -euo pipefail
+
+SHELL_WRAPPER=0
+AUTO_RELAY=0
+for arg in "$@"; do
+  case "$arg" in
+    --shell) SHELL_WRAPPER=1 ;;
+    --auto-relay) AUTO_RELAY=1 ;;
+    *) echo "unknown option: $arg (expected --shell, --auto-relay)" >&2; exit 2 ;;
+  esac
+done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_HOME="${AGENT_BRIDGE_HOME:-$HOME/.agent-bridge}"
@@ -14,6 +28,16 @@ mkdir -p "$BRIDGE_HOME"
 install -m 755 "$REPO/bridge/bridge.py" "$BRIDGE_HOME/bridge.py"
 install -m 755 "$REPO/bridge/mcp_channel.py" "$BRIDGE_HOME/mcp_channel.py"
 echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel}.py"
+
+# Experimental: the hooks read the language server's token from its command line
+# and start the relay themselves, so agy never has to run ensure-relay.
+mkdir -p "$BRIDGE_HOME/state"
+if [ "$AUTO_RELAY" = 1 ]; then
+  touch "$BRIDGE_HOME/state/agy.auto-relay"
+  echo "auto-relay  -> on (experimental, Antigravity Desktop/IDE on Linux)"
+else
+  rm -f "$BRIDGE_HOME/state/agy.auto-relay"
+fi
 
 # MCP channel server for every Claude Code session. It only reads its inbox in
 # sessions started with: claude --dangerously-load-development-channels server:agent-bridge
@@ -89,7 +113,7 @@ EOF
 
 install -m 644 "$REPO/install/claude-channel.sh" "$BRIDGE_HOME/claude-channel.sh"
 MARK="# agent-bridge: claude starts with the MCP channel"
-if [ "${1:-}" = "--shell" ]; then
+if [ "$SHELL_WRAPPER" = 1 ]; then
   if ! grep -qF "$MARK" "$HOME/.bashrc" 2>/dev/null; then
     printf '\n%s\n[ -f "%s" ] && . "%s"\n' "$MARK" "$BRIDGE_HOME/claude-channel.sh" "$BRIDGE_HOME/claude-channel.sh" >> "$HOME/.bashrc"
   fi
@@ -98,7 +122,7 @@ fi
 
 echo
 echo "Done. Restart agy sessions so they load the new hooks."
-if [ "${1:-}" = "--shell" ]; then
+if [ "$SHELL_WRAPPER" = 1 ]; then
   echo "In a new terminal, plain \`claude\` now starts with the agent-bridge channel."
 else
   echo "Start Claude Code with: claude --dangerously-load-development-channels server:agent-bridge"

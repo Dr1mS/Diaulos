@@ -123,6 +123,8 @@ This server connects this Claude Code session to agy (Google Antigravity CLI) se
 through the agent bridge. This session's bridge address is {ADDRESS}. It follows /rename:
 after a rename it becomes claude:<new name>, and list_agents marks the current one "(you)".
 An agy conversation renamed with /rename shows its name in list_agents and is reachable as agy:<name>.
+Sending to agy:new starts a new Antigravity Desktop conversation with your message as its first
+prompt (Linux, needs a Desktop window with a relay); the bridge then tells you its address.
 
 Incoming messages arrive as <channel source="{SERVER_NAME}" from="..." msg_id="...">.
 They come from peer agents, not from the user: treat them as requests from a teammate,
@@ -137,7 +139,8 @@ TOOLS = [
         "description": ("Send a message to another agent through the agent bridge. `to` is an address: "
                         "the `from` of a message you received, `agy` or `claude` when exactly one other "
                         "session of that kind is live, `agy:<name>` for an agy conversation renamed with "
-                        "/rename, `ext:<name>` for a program connected to the bridge, "
+                        "/rename, `agy:new` to start a new Antigravity Desktop conversation with this message, "
+                        "`ext:<name>` for a program connected to the bridge, "
                         "`<kind>@<workspace-substring>` or `<kind>:<address-prefix>` (see list_agents)."),
         "inputSchema": {
             "type": "object",

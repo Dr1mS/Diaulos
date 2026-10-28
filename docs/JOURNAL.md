@@ -203,3 +203,70 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - 16:33:19 : le relais réveille agy (`delivered ['275a0477f6c6'] HTTP 200 config=True`) ;
   - 16:33:30.7 : la réponse d'agy arrive par `send ext:diaulos-test`, en une ligne JSON avec son retour à la ligne intact. Aller-retour : 14,8 s, dont 3 s d'attente du relais ;
   - à l'arrêt du watcher (SIGTERM), l'adaptateur est marqué parti, disparaît de `list`, et un `send` vers lui est refusé.
+
+# 2026-10-28
+
+## 15. Antigravity Desktop : un relais par language server
+
+- **Point de départ** : la session agy « Agy desktop » a décrit à l'utilisateur, puis à Claude par le pont, le fonctionnement interne de Desktop. Claude a vérifié sur la machine ce qui pouvait l'être sans lire le jeton.
+- **Vérifié** :
+  - une fenêtre Desktop a un seul process `language_server` (`/snap/antigravity/56/.../language_server --standalone`), commun à toutes ses conversations. Aucun process ne s'appelle `agy` ;
+  - les hooks de Desktop tournent sous `sh > language_server > antigravity > gnome-shell`. Sonde temporaire dans le hook installé, retirée ensuite : noms de variables seulement ;
+  - les hooks ne reçoivent que `ANTIGRAVITY_CONVERSATION_ID`, comme en CLI. Un hook ne peut donc pas lancer le relais avec les identifiants d'agy ;
+  - le relais de « Agy desktop » tournait avec `agy_pid: None` : `_ancestor("agy")` ne trouvait rien et le relais retombait sur `/healthz` ;
+  - `presence/<conversationId>.lock` porte un `FLOCK WRITE` du language server pour la conversation chargée, et aucun pour un onglet fermé ;
+  - le language server reçoit son jeton sur sa ligne de commande (`--csrf_token`, noms des arguments seulement). Il écoute sur trois ports ; seul le port HTTP de l'API répond 200 à `/healthz` sans jeton.
+- **Non vérifié** : les méthodes `GetAllCascadeTrajectories`, `WaitForConversationFullyIdle` et `GetConversationMetadata` décrites par agy. Les appeler demande le jeton, et le classifieur de permissions de Claude a refusé de le lire (`Credential Exploration`).
+- **Choix de l'utilisateur** : un onglet fermé doit rester joignable, car l'utilisateur de Desktop seul doit pouvoir faire parler des sessions hors de l'onglet ouvert. Le verrou `presence/` ne sert donc pas à arrêter un relais.
+- **Changements** :
+  - `_agy_ancestor()` cherche `agy` ou `language_server`. Sous Desktop, le relais connaît le PID du language server et s'arrête dès qu'il meurt, sans attendre 120 s ;
+  - un relais par processus agy. Il sert sa conversation et toutes celles du même processus qui n'ont pas de relais vivant, chacune avec sa boîte. Un hook qui trouve ce relais y rattache sa conversation : plus de rappel `ensure-relay`, plus de tour perdu. Sous Desktop, un seul `ensure-relay` par lancement de la fenêtre suffit ;
+  - option expérimentale `./install.sh --auto-relay`, Linux seulement, désactivée par défaut. Le hook lit `--csrf_token` sur la ligne de commande de son language server, trouve le port HTTP par `/proc/<pid>/fd` et `/proc/net/tcp`, puis lance le relais en lui passant le jeton par l'environnement. Chaque tentative est notée sans le jeton dans `state/auto-relay.log`.
+- **Pourquoi l'option est désactivée par défaut** : elle lit un secret en dehors du chemin documenté par agy. Elle ne donne aucun accès nouveau, puisque la ligne de commande est lisible par `ps` et que le relais détient déjà le jeton. Mais l'emplacement du jeton n'est pas documenté, et un relecteur ou un antivirus peut prendre ce comportement pour celui d'un malware.
+- **Tests avec un faux language server** : process renommé `language_server` par `prctl`, un port API et un port leurre, hooks lancés comme ses enfants, `AGENT_BRIDGE_HOME` jetable.
+  - avec `--auto-relay` : `SessionStart` lance le relais sans rappel. Une 2e conversation rejoint le même relais, et les deux messages sont livrés (`HTTP 200 config=True`). À l'arrêt du serveur : `relay down: agy exited`, les deux conversations sont marquées `gone`. Le jeton n'apparaît dans aucun fichier ;
+  - sans l'option : rappel affiché tant qu'aucun relais ne tourne. Après un `ensure-relay` depuis la conversation A, le hook de la conversation C ne montre plus de rappel, et le message à C passe par le relais de A ;
+  - ancêtre `agy` (cas CLI) avec l'option : pas de relais automatique, pas de log, rappel habituel.
+- **Pistes restantes** : `WaitForConversationFullyIdle` ou le statut `RUNNING`/`IDLE` pourraient remplacer l'attente fixe de 3 s (`RELAY_GRACE_SECONDS`). Et `GetAllCascadeTrajectories` pourrait lister les conversations d'une fenêtre avant même leur premier hook. Les deux restent à tester avec le jeton.
+
+## 16. Découvrir les conversations sans hook
+
+- **Problème soulevé par l'utilisateur** : devoir écrire à une session pour déclencher ses hooks retire tout l'intérêt du relais automatique.
+- **Test d'un onglet vide** : l'utilisateur a ouvert un nouvel onglet Desktop sans rien taper. Aucun hook n'a tourné. Desktop ne lance `SessionStart` qu'au premier message.
+- **`GetAllCascadeTrajectories`**, appelé par « Agy desktop » avec ses propres identifiants, à la demande de l'utilisateur (Claude n'a pas vu le jeton) :
+  - `HTTP 200`, 4113 octets, une seule clé `trajectorySummaries` : un objet indexé par `cascadeId` ;
+  - champs utiles : `summary`, `status` (`CASCADE_RUN_STATUS_RUNNING` ou `_IDLE`), `annotations.title`, `annotations.archived`, `workspaces[].workspaceFolderAbsoluteUri` ;
+  - 3 entrées : les deux onglets ouverts au lancement, plus `6badc65e`, archivée, chargée seulement par un `GetCascadeTrajectory` antérieur. `eecfe792`, jamais rouverte, n'y figure pas. Aucune conversation d'un autre workspace.
+- **Changements** :
+  - le relais appelle `GetAllCascadeTrajectories` toutes les 30 s et inscrit chaque conversation non archivée, avec son workspace et son titre côté serveur. Elle devient joignable par id ou par titre sans passage de hook ;
+  - avec `--auto-relay`, `list`, `list_agents` et `send` vers une adresse `agy` cherchent, au plus toutes les 10 s, les process `language_server` de l'utilisateur sans relais. Pour chacun, le pont lit le jeton, inscrit ses conversations et lance le relais. Aucun message ni `ensure-relay` n'est nécessaire.
+- **Incident pendant les tests** : un scénario de test lançait `list` et `send` avec l'option active, sans limiter `/proc`. Le scan a trouvé le vrai language server de Desktop, a lu son jeton et a lancé un relais branché sur la vraie fenêtre, avec le dossier du pont de test. Claude l'a repéré dans la sortie et a tué ce relais aussitôt. Il ne lisait que des boîtes de test vides, n'a rien livré, et le jeton n'a été écrit nulle part. Les tests retirent maintenant l'option avant chaque `list` ou `send`, et le scan n'est testé qu'à travers un harnais qui réduit `/proc` au faux serveur.
+- **Tests avec le faux language server** (trois conversations, dont une archivée) :
+  - scan sans hook : le premier `list` lance le relais et affiche les 2 conversations non archivées avec leur titre et leur workspace (`/home/user/My Project`, URI décodée). Les messages à l'onglet « fermé » et à `agy:Open tab` sont livrés ;
+  - les scénarios des hooks (§15) passent toujours. Le jeton n'apparaît dans aucun fichier.
+- **Validation réelle (11:21–11:22 UTC)**, après `./install.sh --shell --auto-relay` et l'arrêt des deux anciens relais :
+  - 11:21:44 : un simple `bridge.py list` lance le relais pid 4009998 sur `127.0.0.1:42875`, avec le PID du language server (`agy=3875923`) ;
+  - 11:21:45 : le relais sert aussi `28cec74b` (« Send Message To Coucou1 »), sans hook ni `ensure-relay` ;
+  - 11:21:55 : message de `claude:Diaulos` livré à `28cec74b` (`HTTP 200 config=True`) ;
+  - 11:22:10 : `pong` reçu de `28cec74b`. Aller-retour : environ 25 s, dont 3 s d'attente du relais.
+
+## 17. Créer une conversation et réveiller l'historique
+
+- **Après un redémarrage de Desktop et un agy CLI lancé sans message** : `list` ne montrait aucune session agy.
+  - Desktop : le scan a trouvé le nouveau language server, mais `GetAllCascadeTrajectories HTTP 200: 0 loaded, 0 archived`. Après un redémarrage, Desktop ne charge une conversation qu'à son utilisation. Ce cas ne laissait aucune trace ; il est maintenant noté dans `auto-relay.log`.
+  - agy CLI : aucun hook ne tourne avant le premier message, et la ligne de commande d'`agy` ne contient pas de jeton (son language server tourne dans le process). Le pont n'a pas de moyen d'y entrer. Limite gardée.
+- **Méthodes du language server** : le binaire `/snap/antigravity/56/.../language_server` contient la liste de `LanguageServerService/*`, dont `StartCascade`, `LoadTrajectory`, `SearchConversations` et `UpdateConversationAnnotations`. Les descripteurs protobuf embarqués donnent les champs de `StartCascadeRequest` : `items`, `workspace_uris`, `config_overrides`, `project_id`… Aucun jeton nécessaire pour les lire.
+- **Expériences confiées à la session Desktop `agy:Diaulos`**, avec ses propres identifiants, après validation de l'utilisateur dans l'interface :
+  - A : `StartCascade` avec seulement `workspaceUris` renvoie `HTTP 400 invalid_argument: CortexTrajectorySource is unspecified`. Avec `"source":"CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT"` : `HTTP 200 {"cascadeId":"10607cf9-…"}`. Un `SendUserCascadeMessage` avec la `userConfig` d'une autre conversation lance le tour ; la nouvelle conversation envoie `pong-new` à 11:54:01 ;
+  - B : `28cec74b`, absente de `GetAllCascadeTrajectories` après le redémarrage, y apparaît après un `GetCascadeTrajectory` (33 étapes chargées depuis le disque). `SendUserCascadeMessage` la réveille ; elle envoie `pong-old` à 11:55:00.
+- **Index de Desktop** : `~/.gemini/antigravity/conversation_summaries.db` liste 46 conversations, dont 39 d'agy CLI (`source = CORTEX_TRAJECTORY_SOURCE_CLI`). Le language server indique son dossier par `--app_data_dir antigravity`. Une conversation archivée porte `archived:true` dans `annotations/<id>.pbtxt`.
+- **Changements** :
+  - le relais de Desktop inscrit, en plus des conversations chargées, celles de l'index modifiées dans les 7 derniers jours, hors CLI, sous-agents, tuées et archivées. La livraison les charge depuis le disque ;
+  - nouvelle adresse `agy:new`. Le relais de Desktop crée la conversation par `StartCascade` dans le workspace de sa propre conversation, y déplace le message, le livre avec la config empruntée, et envoie la nouvelle adresse à l'expéditeur ;
+  - `_deliver` emprunte la config du relais quand la conversation n'a encore aucun prompt.
+- **Tests avec le faux language server** (index SQLite et annotations jetables, sans `--auto-relay`, donc sans scan du vrai `/proc`) : « Disk convo » est inscrite et reçoit son message ; les lignes CLI, archivée, trop ancienne et sous-agent sont écartées ; `agy:new` appelle `StartCascade` avec `file:///home/user/My%20WS`, livre avec `config=True`, et la note de l'adresse arrive dans la boîte `claude`. Les scénarios des §15 et §16 passent toujours.
+- **Validation réelle (12:13–12:14 UTC)**, après réinstallation et arrêt du relais de l'ancien code :
+  - 12:13:43 : un `bridge.py list` lance le relais pid 4088473. Il sert 4 conversations Desktop, dont « Agy desktop » (`1a370b0c`), que la fenêtre n'a pas chargée : elle vient de l'index ;
+  - 12:13:52 : `send agy:new` depuis `claude:Diaulos`. Le relais crée `agy:e59d7273-…`, et la note de l'adresse arrive aussitôt sur le canal de Claude ;
+  - 12:13:56 : consigne livrée (`HTTP 200 config=True`) ;
+  - 12:14:03 : `pong-agy-new` reçu de la nouvelle conversation. 11 s de bout en bout, sans onglet ouvert ni message tapé.

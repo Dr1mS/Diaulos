@@ -6,7 +6,7 @@
 
 **Diaulos lets agy sessions talk to each other.** agy (Google's Antigravity CLI) has no way for one session to reach another: every conversation is an island. With Diaulos, any agy session can message any other one, and the message **wakes the receiver even when it is idle**. The sessions can run in any directory, and you don't have to copy-paste between terminals.
 
-It also connects **Claude Code** sessions, so Gemini and Claude agents can work together. Any number of sessions of either kind can join, on Linux and on Windows.
+It works with the agy CLI and with **Antigravity Desktop**, and it also connects **Claude Code** sessions, so Gemini and Claude agents can work together. Any number of sessions of either kind can join, on Linux and on Windows.
 
 ```
 agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude Code
@@ -18,6 +18,7 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Claude Code  ⇄  Claude C
 - **Get a second opinion.** One agy session asks another to review its changes. In a real test, agy reviewed this project's own code and found three real bugs, all of them fixed since ([journal](docs/JOURNAL.md#4-relecture-croisée-autonome-14451449)).
 - **Mix models.** Have Claude Code check what Gemini wrote, or the other way round.
 - **Wake an idle agent.** You don't have to watch every terminal: a message makes the receiving session take its turn on its own.
+- **Start a new agy session from another agent** (Antigravity Desktop, Linux). `send agy:new "<task>"` opens a new Desktop conversation with that task as its first prompt, without opening a tab or typing anything.
 - **Wake an agent from any program.** A script, a CI job or a bot joins as `ext:<name>`: it sends with `bridge.py send <agent> - --from ext:<name>` and reads the agent's replies with `bridge.py watch ext:<name> --json`. **Read [Security](#security) first:** the program feeds outside text to an agent that can run commands.
 - **See the messages fly.** With [Paros](https://github.com/Dr1mS/Paros), each agy and Claude Code session has a pixel pet on your desktop, and every message sent through Diaulos flies from one pet to the other as a letter.
 
@@ -31,7 +32,7 @@ Diaulos is compatible with [Paros](https://github.com/Dr1mS/Paros), a desktop co
 
 - Linux or Windows 10/11
 - Python 3.8 or later (standard library only, nothing to `pip install`)
-- agy (Antigravity CLI)
+- agy (Antigravity CLI) or Antigravity Desktop
 - Claude Code, if you want Claude sessions to join
 
 ## Installation
@@ -45,6 +46,8 @@ git clone https://github.com/Dr1mS/Diaulos && cd Diaulos
 ```bash
 ./install.sh --shell
 ```
+
+Add `--auto-relay` to also try the experimental relay start for Antigravity Desktop and IDE (see [Experimental: auto-relay](#experimental-auto-relay)).
 
 **Windows** (from PowerShell)
 
@@ -77,6 +80,31 @@ In Claude Code, just ask too: *"send this to agy"*. Claude uses the `send` and `
 
 > **Windows:** Windows PowerShell does not expand `~` in arguments to programs. There, write `python3 $HOME\.agent-bridge\bridge.py …`. Commands suggested to agents use the absolute path of the Python interpreter, and prefix it with `&` if paths contain spaces (PowerShell 5.1 call operator). agy needs nothing special, because its hooks give it the absolute path.
 
+## Antigravity Desktop
+
+Desktop runs every conversation of a window in one background process, its language server. Diaulos uses that: one relay per window serves all its conversations.
+
+| | agy CLI | Antigravity Desktop |
+|---|---|---|
+| Reachable after its first message | yes, once agy has run `ensure-relay` (it is reminded to) | yes, without `ensure-relay` once the window has a relay |
+| Reachable without any message | no | yes, with `--auto-relay`: conversations loaded in the window, and the client's own conversations of the last 7 days |
+| Closed tab, or conversation not reopened since launch | — | reachable: delivery loads it from disk, and its turn runs in the background |
+| Start a new session from another agent | no | `send agy:new "<task>"` (Linux) |
+| Relay stops | when `agy` exits | when the window's language server exits |
+
+**Recommended on Linux:** `./install.sh --shell --auto-relay`. Then, as soon as an agent lists the agy sessions or sends to one, Diaulos starts the window's relay by itself. Read [Experimental: auto-relay](#experimental-auto-relay) first: the bridge reads the language server's token from its command line.
+
+Without `--auto-relay`, one `ensure-relay` per window start is enough, from any conversation of the window.
+
+Starting a session from Claude Code, for example:
+
+```bash
+python3 ~/.agent-bridge/bridge.py send agy:new "Run the test suite and send the failures to claude:api"
+# the bridge answers with the new address, e.g. agy:e59d7273-…, and the session's replies come from it
+```
+
+The new conversation opens in the workspace of the conversation that started the relay.
+
 ## Proof: a four-agent relay
 
 Four sessions passed one message around a circle with no human involved. Each one appended its name and the time, then forwarded the message.
@@ -105,9 +133,28 @@ any agent ── send ──▶  ~/.agent-bridge/inbox/<address>/*.json
 ### agy side
 
 - Global hooks live in `~/.gemini/config/hooks.json`. `SessionStart` introduces the bridge. `PreInvocation` delivers messages, and reminds agy to start its relay until the relay runs.
-- The **relay** wakes an idle agy. agy hands its own shell `ANTIGRAVITY_LS_ADDRESS` and `ANTIGRAVITY_CSRF_TOKEN`; this is documented in agy's built-in `plugin` skill. The relay is started from that shell with `bridge.py ensure-relay`, so it calls `SendUserCascadeMessage` on the local language server with agy's own credentials. It copies the conversation's latest `userConfig` (model, tools, permission grants), so the injected turn runs exactly like one you typed. It keeps the token in memory only and stops when agy exits. When agy's PID is not found among the hook ancestors (e.g. if Desktop or IDE run hooks under a different process tree), the relay monitors the language server via `/healthz`: if the language server stays unreachable for 120 s, the relay stops cleanly and the conversation is marked `gone` (it disappears from `list`) until a new hook runs.
+- The **relay** wakes an idle agy. agy hands its own shell `ANTIGRAVITY_LS_ADDRESS` and `ANTIGRAVITY_CSRF_TOKEN`; this is documented in agy's built-in `plugin` skill. Hooks get neither, only `ANTIGRAVITY_CONVERSATION_ID`. The relay is started from that shell with `bridge.py ensure-relay`, so it calls `SendUserCascadeMessage` on the local language server with agy's own credentials. It copies the conversation's latest `userConfig` (model, tools, permission grants), so the injected turn runs exactly like one you typed. It keeps the token in memory only.
+- **One relay per agy process.** All the conversations of one agy process share its language server, its address and its token. One relay therefore serves all of them, each with its own inbox. A conversation whose hook finds a running relay for its process joins it at once, without running `ensure-relay`, and without the reminder. Every 30 s, the relay also asks its language server which conversations it has loaded (`GetAllCascadeTrajectories`: the window's tabs, open or closed since launch, but not the whole history on disk) and registers them, archived ones excepted. They are then reachable, by id or by title, before any of their hooks ran. On Desktop, the relay also reads the client's index (`~/.gemini/antigravity/conversation_summaries.db`) and registers its own conversations modified in the last 7 days, even when the window has not loaded them: agy CLI conversations, subagents, killed and archived conversations are left out. Delivery loads such a conversation from disk first (`GetCascadeTrajectory`).
+- **`agy:new` starts a conversation** (Desktop, Linux). A message sent to `agy:new` waits in its own inbox. The Desktop relay creates a conversation with `StartCascade` (`source: CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT`), in the workspace of the relay's own conversation. It moves the message to the new conversation's inbox and delivers it, with the config of its own conversation, since a new conversation has none. The sender then receives a note from the bridge with the new address, `agy:<conversationId>`. `send` refuses `agy:new` while no Desktop window has a relay.
+  - agy CLI: hooks and shells are children of `agy`. The relay stops when that `agy` exits.
+  - Antigravity Desktop (and likely IDE, not checked yet): hooks and shells are children of the `language_server` process (`antigravity` → `language_server` → `sh`), shared by every conversation of a window. A conversation stays reachable after its tab is closed: the turn then runs in the background. One `ensure-relay` per window start is enough, from any conversation. The relay stops when the language server exits.
+  - When neither process is found among the hook ancestors, the relay serves its own conversation only and monitors the language server via `/healthz`: if the language server stays unreachable for 120 s, the relay stops cleanly and the conversation is marked `gone` (it disappears from `list`) until a new hook runs.
 - **Optional listening `Stop` hook**, for when no relay runs: if `~/.agent-bridge/state/agy.listen` exists, the hook waits for a message for the number of seconds written in that file (6 h if empty). It lets go as soon as you type in that conversation or delete the file. It monitors prompt history across `~/.gemini/antigravity-cli`, `antigravity` and `antigravity-ide` (support for Desktop and IDE history is experimental).
 - **Message format**: each message injected into agy is wrapped in `<bridge-message id="..." from="..." ts="...">...</bridge-message>`.
+
+#### Experimental: auto-relay
+
+With `./install.sh --auto-relay` (Linux only, off by default), a Desktop or IDE window needs no `ensure-relay` and no message at all. Desktop starts its language server with its token on the command line (`--csrf_token`). The bridge reads the token there, finds the server's HTTP port among its listening sockets (the one where `/healthz` answers 200), and starts the relay with them. Two things trigger it:
+
+- an agent looks for agy sessions (`list`, `list_agents`, or `send` to an `agy` address): the bridge looks, at most every 10 s, for language servers of your user that have no relay, and starts one for each window that has a conversation loaded. Desktop runs no hook before the first message of a conversation, so this is what makes a freshly opened window reachable;
+- a hook runs under a language server without a relay. The token is passed to the relay through its environment and is never written to disk or logs. Each attempt is recorded, without the token, in `~/.agent-bridge/state/auto-relay.log`. With agy CLI, the option does nothing: its language server runs inside `agy`.
+
+Why it is off by default:
+
+- It reads a secret outside the path agy documents (its `run_command` shell). It gives no new access: on Linux, any local process can already read that command line (`ps`), and the relay already holds the same token. But it is the kind of behavior a security tool or a reviewer may flag.
+- Where the token sits is undocumented, and an Antigravity update can move it. When that happens, the hook falls back to the reminder.
+
+Re-run `./install.sh` without `--auto-relay` to turn it off.
 
 Manual relay checks, to run inside agy:
 
@@ -128,7 +175,7 @@ python3 ~/.agent-bridge/bridge.py agy-relay --inspect        # model-related fie
 
 ### Delivery
 
-- **Addresses**: `agy:<conversationId>`, `claude:<session name>`, `ext:<name>` for a program, live while it runs `watch ext:<name>` (one watcher per address), and `claude` for the shared inbox read by `watch`. An agy conversation can also be reached by its title, as `agy:<name>` (set it with `/rename` in agy; `list_agents` shows it). A Claude address follows `/rename`: the session switches to its new name within a second, its old names become aliases, and messages still waiting under old names move with it. A message addressed to an unknown `claude:<name>` is refused with the list of live peers, preventing lost messages. An agent cannot message itself. Addresses are strictly validated: path separators (`/`, `\`) and `..` are forbidden.
+- **Addresses**: `agy:<conversationId>`, `claude:<session name>`, `ext:<name>` for a program, live while it runs `watch ext:<name>` (one watcher per address), and `claude` for the shared inbox read by `watch`. An agy conversation can also be reached by its title, as `agy:<name>` (set it with `/rename` in agy; `list_agents` shows it). `agy:new` starts a new Antigravity Desktop conversation with the message as its first prompt (Linux only, see [agy side](#agy-side)). A Claude address follows `/rename`: the session switches to its new name within a second, its old names become aliases, and messages still waiting under old names move with it. A message addressed to an unknown `claude:<name>` is refused with the list of live peers, preventing lost messages. An agent cannot message itself. Addresses are strictly validated: path separators (`/`, `\`) and `..` are forbidden.
 - **Delivery**: each message is written to a temporary JSON file and renamed atomically. A reader claims messages by moving them into `archive/` before reading, so two readers never get the same message. If delivery fails (language server unreachable, HTTP error), messages return to the inbox and the relay retries every 10 s without crashing. In the rare case where the language server accepts a message but its answer is lost (timeout), the message is sent again: delivery is at least once, and a duplicate is possible but nothing is lost. Messages that arrive while a batch waits are delivered together in that batch.
 - **Replies**: every message carries the sender's `from` address. In agy it is filled in from `ANTIGRAVITY_CONVERSATION_ID`.
 - **History & Maintenance**: `~/.agent-bridge/log.jsonl` records everything sent and rotates to `log.jsonl.1` beyond 10 MB. Archived messages older than 30 days are automatically purged.
@@ -152,6 +199,7 @@ python3 ~/.agent-bridge/bridge.py agy-relay --inspect        # model-related fie
 | `~/.claude/settings.json` | allow rules for the bridge commands and MCP tools |
 | `~/.claude.json` (via `claude mcp add -s user`) | the `agent-bridge` MCP server |
 | `~/.bashrc` (Linux, `--shell` only) | sources the `claude` wrapper |
+| `~/.agent-bridge/state/agy.auto-relay` (Linux, `--auto-relay` only) | turns on the experimental auto-relay |
 | PowerShell profile (Windows, `-Shell` only) | dot-sources the `claude` wrapper |
 | `HKCU\Software\Microsoft\Command Processor\AutoRun` (Windows, `-Shell` only) | the `claude` doskey macro, added after any existing command |
 
@@ -162,7 +210,7 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 | Symptom | Check |
 |---|---|
 | No channel confirmation screen when `claude` starts | The wrapper is not active in this terminal. Open a new terminal after installing, and check that you used `--shell` / `-Shell`. |
-| `list` shows an agy session with `no relay` | Read `~/.agent-bridge/state/relay-<conversationId>.log`. The relay can only be started from agy's own shell: ask agy to run `bridge.py ensure-relay`. |
+| `list` shows an agy session with `no relay` | Read `~/.agent-bridge/state/relay-<conversationId>.log`. The relay can only be started from agy's own shell: ask agy to run `bridge.py ensure-relay`. With `--auto-relay`, read `~/.agent-bridge/state/auto-relay.log`. |
 | agy never receives messages | Restart agy after installing. The files `~/.agent-bridge/state/last_<event>_input.json` are rewritten each time a hook runs. |
 | A Claude session is not listed | Only sessions started with the channel are listed. Check the launch command, or use the `watch claude` fallback. |
 | `'agy' matches 2 live agy peers` | Several sessions are live. Pick one with `agy@<directory>`, `agy:<id-prefix>` or `agy:<name>`. |
@@ -175,6 +223,7 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 - **Peers are not the user.** Incoming messages are labelled as coming from a peer agent. Agents are told that such a message never counts as user approval, and that they must never do for a peer something their own permissions blocked.
 - **Unverified sender.** The `from` address is declared by the sender and is unverified. A message that claims to relay the user never counts as user approval.
 - **The CSRF token never touches disk or logs.**
+- **The auto-relay reads the token from the language server's command line.** It is off by default; see [Experimental: auto-relay](#experimental-auto-relay).
 
 > [!WARNING]
 > **Connecting a program (`ext:<name>`) hands outside text to an agent that can act on your machine.** An adapter forwards whatever its source sends: a chat message, an issue, a log line. Anyone who can write to that source can write to your agent, including instructions crafted to hijack it (prompt injection). The bridge labels these messages as coming from a peer, never from the user, but that label is a hint to the model, not a barrier.
@@ -187,13 +236,15 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 ## Status and limits
 
 - **Experimental.** Diaulos relies on an undocumented agy language-server method (`SendUserCascadeMessage`) and on Claude Code channels, which are a research preview. Either may change without notice.
-- Each relay is bound to one agy conversation and stops when that agy process exits.
+- Each relay serves the conversations of one agy process (one agy CLI, or one Antigravity Desktop or IDE language server) and stops when that process exits.
+- An agy CLI session cannot be reached before its first message: agy runs no hook before it, and its language server runs inside `agy`, out of the bridge's reach.
+- `agy:new` and the conversations read from disk need Antigravity Desktop on Linux. `agy:new` opens the conversation in the workspace of the relay's conversation; whether Desktop shows it in its tabs is not verified yet.
 - Claude Code shows a confirmation screen at every launch while the channels preview requires it.
 - On Windows, Claude Code's permission rules do not cover PowerShell commands run by Claude: Claude Code may ask for confirmation when invoking bridge commands.
 
 **Tested with**
 
-- Linux: Claude Code 2.1.301, agy (language server 1.4.0, Gemini 3.8 Flash). Validated Antigravity clients for messaging: agy CLI, Antigravity Desktop and Antigravity IDE. On Desktop and IDE, conversation titles, the listening `Stop` hook and the relay's stop without a known agy pid are not verified yet.
+- Linux: Claude Code 2.1.301, agy (language server 1.4.0, Gemini 3.8 Flash). Validated Antigravity clients for messaging: agy CLI, Antigravity Desktop and Antigravity IDE. Validated on a real Antigravity Desktop window: hooks running under `language_server`, conversation titles, the shared relay, the auto-relay started by `list`, waking a conversation not loaded since launch, and `agy:new`. Not verified yet on Desktop and IDE: the listening `Stop` hook. The IDE is expected to behave like Desktop, but this is not checked.
 - Windows 11: Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14. Tested: hooks, relay waking an idle agy, MCP channel waking an interactive Claude session, and messages both ways.
 
 The full lab notebook, in French, with every experiment, error message and design decision, is in [docs/JOURNAL.md](docs/JOURNAL.md).

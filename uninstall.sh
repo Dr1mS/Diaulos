@@ -86,7 +86,7 @@ EOF
 fi
 rm -f "$BRIDGE_HOME/claude-channel.sh"
 rm -rf "$HOME/.claude/skills/agy-bridge" && echo "removed claude skill"
-rm -f "$BRIDGE_HOME/bridge.py" "$BRIDGE_HOME/mcp_channel.py"
+rm -f "$BRIDGE_HOME/bridge.py" "$BRIDGE_HOME/mcp_channel.py" "$BRIDGE_HOME/state/agy.auto-relay"
 if [ "${1:-}" = "--purge" ]; then
   rm -rf "$BRIDGE_HOME" && echo "purged $BRIDGE_HOME"
 fi

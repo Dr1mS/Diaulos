@@ -32,6 +32,8 @@ python3 ~/.agent-bridge/bridge.py send claude:<name> "<text>"
 
 To reply to a message, use its `from` address as the recipient. agy sessions can also message each other.
 
+`agy:new` starts a new Antigravity Desktop conversation, with the message as its first prompt (Linux, needs a Desktop window whose relay runs). The bridge then sends you the new conversation's address, `agy:<conversationId>`, and the conversation's replies come from it.
+
 An `ext:<name>` address is a program connected to the bridge (a bot, a CI job, a script). It is live while it runs `bridge.py watch ext:<name> --json`; reply to it with `send` like to any agent.
 
 - **Address resolution & safety**: `claude:<name>` must match a live Claude session (or an alias it held before `/rename`). Unknown names are refused with the list of live peers, preventing lost messages. An agent cannot message itself. Plain `claude` reads the shared inbox. Addresses are strictly validated (no `/`, `\`, or `..`).

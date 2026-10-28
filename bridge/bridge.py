@@ -17,6 +17,7 @@ Addresses:
   ext:<name>        any other program, live while it runs `watch ext:<name>`
 `agy` or `claude` alone picks the only other live session of that kind;
 `agy:<name>` picks an agy conversation by its title (set with /rename);
+`agy:new` starts a new Antigravity Desktop conversation with the message as its first prompt;
 `<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
 agy sessions can message each other the same way.
 
@@ -27,7 +28,7 @@ Usage:
                                                    (--json: one JSON object per line)
   bridge.py list                                   show known agy peers
   bridge.py agy-hook <event>                       agy hook entry point (stdin/stdout JSON)
-  bridge.py ensure-relay                           start this conversation's relay (agy shell only)
+  bridge.py ensure-relay                           start the relay of this agy process (agy shell only)
   bridge.py agy-relay [--probe TEXT | --inspect]   relay loop / one-off tests (agy shell only)
 """
 import codecs
@@ -53,6 +54,10 @@ RELAY_GRACE_SECONDS = 3  # let a running agy pick the message up through its hoo
 RELAY_RETRY_SECONDS = 10  # wait between failed deliveries
 RELAY_MAX_ATTEMPTS = 6  # per message, when the language server answers with an error
 LS_GIVE_UP_SECONDS = 120  # without a known agy pid, stop once the language server is gone this long
+DISCOVER_SECONDS = 30  # how often a relay asks its language server which conversations it has loaded
+AUTO_SCAN_SECONDS = 10  # auto-relay: how often listing agy peers looks for language servers without a relay
+RECENT_DAYS = 7  # Desktop conversations modified this recently are reachable even when not loaded
+NEW = "agy:new"  # inbox read by Desktop relays: each message there starts a new conversation
 LS_TIMEOUT = 15  # seconds per language-server request
 PEER_STALE_SECONDS = 6 * 3600
 ARCHIVE_DAYS = 30
@@ -160,13 +165,13 @@ if WINDOWS:
             k32.CloseHandle(snap)
         return table
 
-    def _ancestor(name):
-        """Pid of the nearest ancestor running `name` (e.g. "agy"), or None."""
+    def _ancestor(*names):
+        """Pid of the nearest ancestor running one of `names` (e.g. "agy"), or None."""
         table, pid, seen = _process_table(), os.getppid(), set()
         while pid and pid in table and pid not in seen:  # pids are reused: guard against cycles
             seen.add(pid)
             parent, exe = table[pid]
-            if exe in (name, name + ".exe"):
+            if exe in names or exe in [n + ".exe" for n in names]:
                 return pid
             pid = parent
         return None
@@ -174,12 +179,12 @@ else:
     def _alive(pid):
         return bool(pid) and os.path.exists(f"/proc/{pid}")
 
-    def _ancestor(name):
+    def _ancestor(*names):
         pid = os.getppid()
         while pid > 1:
             try:
                 with open(f"/proc/{pid}/comm") as f:
-                    if f.read().strip() == name:
+                    if f.read().strip() in names:
                         return pid
                 with open(f"/proc/{pid}/stat") as f:
                     pid = int(f.read().rsplit(")", 1)[1].split()[1])
@@ -249,6 +254,8 @@ def peers(kind=None):
     pid, a peer seen by a hook in the last hours still counts, unless its
     relay saw it go away (`gone`).
     """
+    if kind in (None, "agy"):
+        _auto_relay_scan()
     found = []
     os.makedirs(_path("peers"), exist_ok=True)
     for name in sorted(os.listdir(_path("peers"))):
@@ -262,7 +269,7 @@ def peers(kind=None):
         if peer.get("gone"):
             continue
         if peer.get("conversation"):
-            peer["name"] = _agy_title(peer["conversation"])
+            peer["name"] = _agy_title(peer["conversation"]) or peer.get("title")
         peer["relay_alive"] = _alive(peer.get("relay_pid"))
         pid = peer.get("pid") or peer.get("agy_pid")
         peer["process_alive"] = _alive(pid) if pid else None
@@ -319,6 +326,10 @@ def resolve(to, sender=None):
     kind, sep, rest = to.partition(":") if ":" in to else to.partition("@")
     if kind not in ("agy", "claude", "ext"):
         sys.exit(f"unknown recipient {to!r}")
+    if to == NEW:
+        if any(p["relay_alive"] and _is_language_server(p.get("agy_pid")) for p in peers("agy")):
+            return to
+        sys.exit(f"{NEW}: no Antigravity Desktop window with a running relay (Linux only)")
     candidates = [p for p in peers(kind) if p["address"] != sender]
     if sep == ":":
         exact = [p for p in candidates if p["address"] == to or to in p.get("aliases", ())]
@@ -548,13 +559,13 @@ def agy_hook(event):
         return
     me = f"agy:{conversation}"
     fields = {"conversation": conversation, "gone": False}  # a hook proves the conversation is back
-    agy_pid = _agy_ancestor()  # hooks run as children of agy
+    agy_pid = _agy_ancestor()  # hooks run as children of agy (CLI) or of its language server (Desktop, IDE)
     if agy_pid:
         fields["agy_pid"] = agy_pid
     if payload.get("workspacePaths"):
         fields["workspace"] = payload["workspacePaths"][0]
     peer = _update_peer(me, **fields)
-    relay_alive = _alive(peer.get("relay_pid"))
+    relay_alive = _alive(peer.get("relay_pid")) or (bool(agy_pid) and _attach_relay(me, agy_pid))
 
     if event == "SessionStart":
         text = (f"This agy session is reachable through the agent bridge as {me}. "
@@ -616,18 +627,19 @@ def agy_hook(event):
 
 # ---------------------------------------------------------------- agy relay
 
-def _ls_call(method, body):
+def _ls_call(method, body, creds=None):
     """POST to agy's language server; (HTTP status, body), or (None, error) if unreachable.
 
-    The token comes from the env agy gave us and is never logged.
+    The token comes from the env agy gave us, or `creds` (address, token)
+    found by the auto-relay, and is never logged.
     """
     import urllib.error
     import urllib.request
+    address, token = creds or (os.environ["ANTIGRAVITY_LS_ADDRESS"], os.environ["ANTIGRAVITY_CSRF_TOKEN"])
     req = urllib.request.Request(
-        f"http://{os.environ['ANTIGRAVITY_LS_ADDRESS']}/exa.language_server_pb.LanguageServerService/{method}",
+        f"http://{address}/exa.language_server_pb.LanguageServerService/{method}",
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json",
-                 "x-codeium-csrf-token": os.environ["ANTIGRAVITY_CSRF_TOKEN"]},
+        headers={"Content-Type": "application/json", "x-codeium-csrf-token": token},
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=LS_TIMEOUT) as resp:
@@ -652,7 +664,9 @@ def _ls_reachable():
 
 
 def _agy_ancestor():
-    return _ancestor("agy")
+    # agy CLI runs hooks and shells as its own children. Desktop and IDE run them
+    # under their language server, which outlives a closed conversation tab.
+    return _ancestor("agy", "language_server")
 
 
 def _last_user_config_from(trajectory):
@@ -674,17 +688,23 @@ def _last_user_config_from(trajectory):
     return None
 
 
-def _deliver(cascade, text):
+def _deliver(cascade, text, fallback=None):
     """(HTTP status, response, cascadeConfig copied). Only 200 means delivered.
 
     Status None: the language server is unreachable. 599: it was reachable
-    but gave no answer to SendUserCascadeMessage.
+    but gave no answer to SendUserCascadeMessage. A conversation that has
+    no prompt yet (made by StartCascade) borrows the config of `fallback`.
+    GetCascadeTrajectory also loads a conversation the server had not
+    loaded yet, from disk.
     """
     status, resp = _ls_call("GetCascadeTrajectory", {"cascadeId": cascade})
     if status != 200:
         # Without the config agy fails with "plan model not specified": retry later.
         return status, f"GetCascadeTrajectory: {resp[:200]}", False
     config = _last_user_config_from(resp)
+    if not config and fallback and fallback != cascade:
+        status, resp = _ls_call("GetCascadeTrajectory", {"cascadeId": fallback})
+        config = _last_user_config_from(resp) if status == 200 else None
     body = {"cascadeId": cascade, "items": [{"text": text}]}
     if config:
         body["cascadeConfig"] = config
@@ -703,6 +723,121 @@ def _require_agy_env():
     return os.environ["ANTIGRAVITY_CONVERSATION_ID"]
 
 
+def _is_language_server(pid):
+    """True if `pid` is an Antigravity Desktop or IDE language server (Linux only)."""
+    if WINDOWS or not pid:
+        return False
+    try:
+        with open(f"/proc/{pid}/comm") as f:
+            return f.read().strip() == "language_server"
+    except OSError:
+        return False
+
+
+def _ls_data_dir(pid):
+    """Data directory of the language server `pid` (from --app_data_dir), or None."""
+    if not _is_language_server(pid):
+        return None
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            args = f.read().decode("utf-8", "replace").split("\0")
+        name = args[args.index("--app_data_dir") + 1]
+    except (OSError, ValueError, IndexError):
+        return None
+    return name if os.path.isabs(name) else os.path.expanduser(f"~/.gemini/{name}")
+
+
+def _recent_conversations(data_dir):
+    """[(id, title, workspace)] of the client's own conversations modified in the last RECENT_DAYS.
+
+    Read from its conversation_summaries.db, which also indexes agy CLI
+    conversations: those belong to a CLI process and are left out, with
+    subagents, killed and archived conversations.
+    """
+    import sqlite3
+    import urllib.parse
+    db = os.path.join(data_dir, "conversation_summaries.db")
+    if not os.path.exists(db):
+        return []
+    cutoff = datetime.fromtimestamp(time.time() - RECENT_DAYS * 86400, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with contextlib.closing(sqlite3.connect(f"file:{urllib.parse.quote(db)}?mode=ro", uri=True, timeout=2)) as con:
+            rows = con.execute(
+                "SELECT conversation_id, title, workspace_uris FROM conversation_summaries"
+                " WHERE last_modified_time >= ? AND coalesce(source, '') != 'CORTEX_TRAJECTORY_SOURCE_CLI'"
+                " AND cast(coalesce(killed, 0) AS integer) = 0 AND cast(coalesce(nesting_depth, 0) AS integer) = 0"
+                " ORDER BY last_modified_time DESC",
+                (cutoff,)).fetchall()
+    except sqlite3.Error:
+        return []
+    found = []
+    for cascade, title, uris in rows:
+        if not UUID_RE.match(cascade or ""):
+            continue
+        with contextlib.suppress(OSError), open(os.path.join(data_dir, "annotations", f"{cascade}.pbtxt"), "rb") as f:
+            if re.search(rb"\barchived:\s*true", f.read()):
+                continue
+        try:
+            uri = next(iter(json.loads(uris or "[]")), "")
+        except (json.JSONDecodeError, TypeError):
+            uri = ""
+        workspace = urllib.parse.unquote(uri[len("file://"):]) if uri.startswith("file://") else None
+        found.append((cascade, title or None, workspace))
+    return found
+
+
+def _host_peers(agy_pid):
+    """agy peers whose hooks run under the process `agy_pid`, read straight from peers/.
+
+    All the conversations of one agy process share its language server, so
+    one relay, started with that server's address and token, can wake any
+    of them. Desktop runs every conversation of a window in one server.
+    """
+    found = []
+    os.makedirs(_path("peers"), exist_ok=True)
+    for name in os.listdir(_path("peers")):
+        if not (name.startswith("agy-") and name.endswith(".json")):
+            continue
+        try:
+            with open(_path("peers", name), encoding="utf-8") as f:
+                peer = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if peer.get("agy_pid") == agy_pid and not peer.get("gone") and peer.get("conversation"):
+            found.append(peer)
+    return found
+
+
+def _host_relay(agy_pid):
+    """Pid of a live relay serving a conversation of the agy process `agy_pid`, or None."""
+    for peer in _host_peers(agy_pid):
+        if _alive(peer.get("relay_pid")):
+            return peer["relay_pid"]
+    return None
+
+
+def _host_lock(agy_pid):
+    """One relay start at a time per agy process: the hooks of two conversations can run together."""
+    os.makedirs(_path("state"), exist_ok=True)
+    return _locked(_path("state", f"host-{agy_pid}"), wait=5.0)
+
+
+def _attach_relay(me, agy_pid):
+    """From a hook: give `me` the relay of its agy process, starting one if allowed; True if it has one.
+
+    Hooks do not get the language server's token. Only the experimental
+    auto-relay (install.sh --auto-relay) starts a relay from here, without
+    waiting for agy to run ensure-relay.
+    """
+    with _host_lock(agy_pid):
+        relay = _host_relay(agy_pid)
+        if not relay and _auto_relay_enabled():
+            relay = _auto_relay(me, agy_pid)
+        if relay:
+            _update_peer(me, relay_pid=relay)
+    return bool(relay)
+
+
 def ensure_relay():
     cascade = _require_agy_env()
     me = f"agy:{cascade}"
@@ -711,10 +846,23 @@ def ensure_relay():
         print(f"relay already running for {me} (pid {peer['relay_pid']})")
         return
     agy_pid = _agy_ancestor()
+    workspace = peer.get("workspace") or os.getcwd()
+    with _host_lock(agy_pid) if agy_pid else contextlib.nullcontext():
+        relay = _host_relay(agy_pid) if agy_pid else None
+        if relay:
+            _update_peer(me, conversation=cascade, relay_pid=relay, agy_pid=agy_pid, workspace=workspace)
+            print(f"relay pid {relay} of this agy process now serves {me}; you are reachable as {me}")
+            return
+        pid = _spawn_relay(cascade, agy_pid, workspace)
+    print(f"relay started for {me} (pid {pid}); you are now reachable as {me}")
+
+
+def _spawn_relay(cascade, agy_pid, workspace, env=None):
+    """Start the relay detached from the calling shell or hook; return its pid."""
     os.makedirs(_path("state"), exist_ok=True)
     log = open(_path("state", f"relay-{cascade}.log"), "a", encoding="utf-8")
     argv = [sys.executable, "-u", SCRIPT, "agy-relay", "--agy-pid", str(agy_pid or 0)]
-    streams = dict(stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    streams = dict(stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env)
     if WINDOWS:
         # Outlive agy's run_command shell: no console, own process group, and out of
         # its job object when the job allows it.
@@ -726,9 +874,122 @@ def ensure_relay():
             proc = subprocess.Popen(argv, creationflags=flags, **streams)
     else:
         proc = subprocess.Popen(argv, start_new_session=True, **streams)
-    _update_peer(me, conversation=cascade, relay_pid=proc.pid, agy_pid=agy_pid,
-                 workspace=peer.get("workspace") or os.getcwd())
-    print(f"relay started for {me} (pid {proc.pid}); you are now reachable as {me}")
+    _update_peer(f"agy:{cascade}", conversation=cascade, relay_pid=proc.pid, agy_pid=agy_pid, workspace=workspace)
+    return proc.pid
+
+
+# Experimental, Linux only, off by default (install.sh --auto-relay). agy hands its
+# token to its run_command shell only. Desktop and IDE also pass it to their
+# language server on its command line (--csrf_token), and a hook runs as a child
+# of that server: the hook reads it there and starts the relay itself.
+
+def _auto_relay_enabled():
+    return not WINDOWS and os.path.exists(_path("state", "agy.auto-relay"))
+
+
+def _auto_relay_log(text):
+    with contextlib.suppress(OSError), open(_path("state", "auto-relay.log"), "a", encoding="utf-8") as f:
+        f.write(f"{_now()} {text}\n")
+
+
+def _ls_credentials(pid):
+    """(address, token) of the language server `pid`, or (None, reason). Never logs the token."""
+    try:
+        with open(f"/proc/{pid}/comm") as f:
+            if f.read().strip() != "language_server":
+                return None, None  # agy CLI: its language server runs inside agy
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            args = f.read().decode("utf-8", "replace").split("\0")
+        token = next((a.split("=", 1)[1] for a in args if a.startswith("--csrf_token=")), None)
+        if token is None and "--csrf_token" in args[:-1]:
+            token = args[args.index("--csrf_token") + 1]
+        if not token:
+            return None, "no --csrf_token on the language server command line"
+        sockets = set()
+        for fd in os.listdir(f"/proc/{pid}/fd"):
+            with contextlib.suppress(OSError):
+                link = os.readlink(f"/proc/{pid}/fd/{fd}")
+                if link.startswith("socket:["):
+                    sockets.add(link[8:-1])
+        ports = []
+        for table, host in (("/proc/net/tcp", "127.0.0.1"), ("/proc/net/tcp6", "[::1]")):
+            with contextlib.suppress(OSError), open(table) as f:
+                for line in f.readlines()[1:]:
+                    cols = line.split()
+                    if cols[3] == "0A" and cols[9] in sockets:  # 0A: LISTEN
+                        ports.append(f"{host}:{int(cols[1].rsplit(':', 1)[1], 16)}")
+    except (OSError, ValueError, IndexError) as e:
+        return None, f"cannot inspect language server pid {pid}: {e!r}"
+    import urllib.request
+    for address in ports:  # the server also listens on HTTPS and gRPC ports: /healthz answers 200 on the API port
+        try:
+            with urllib.request.urlopen(f"http://{address}/healthz", timeout=2) as resp:
+                if resp.status == 200:
+                    return (address, token), None
+        except OSError:  # HTTPError is an OSError too
+            continue
+    return None, f"no port of language server pid {pid} answers /healthz ({len(ports)} listening)"
+
+
+def _auto_relay(me, agy_pid):
+    """Start the relay from a hook with the language server's credentials; its pid, or None."""
+    creds, reason = _ls_credentials(agy_pid)
+    if not creds:
+        if reason:
+            _auto_relay_log(f"{me}: not started: {reason}")
+        return None
+    return _spawn_auto_relay(me.split(":", 1)[1], agy_pid, creds)
+
+
+def _spawn_auto_relay(cascade, agy_pid, creds):
+    env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS=creds[0], ANTIGRAVITY_CSRF_TOKEN=creds[1],
+               ANTIGRAVITY_CONVERSATION_ID=cascade)
+    workspace = (_read_peer(f"agy:{cascade}") or {}).get("workspace") or os.getcwd()
+    pid = _spawn_relay(cascade, agy_pid, workspace, env=env)
+    _auto_relay_log(f"agy:{cascade}: relay pid {pid} started on {creds[0]}")
+    return pid
+
+
+_last_scan = {}  # language server pid: last answer logged by this process
+
+
+def _auto_relay_scan():
+    """Start a relay for each of this user's language servers that has none, at most every AUTO_SCAN_SECONDS.
+
+    Desktop runs no hook before the first message of a conversation. Listing
+    or resolving agy peers runs this scan instead, so an agent that looks
+    for agy sessions finds every conversation loaded in an open window.
+    """
+    if not _auto_relay_enabled():
+        return
+    stamp = _path("state", "auto-relay.scan")
+    with contextlib.suppress(OSError):
+        if time.time() - os.path.getmtime(stamp) < AUTO_SCAN_SECONDS:
+            return
+    with contextlib.suppress(OSError), open(stamp, "w"):
+        pass
+    for name in os.listdir("/proc"):
+        try:
+            pid = int(name)
+            if os.stat(f"/proc/{pid}").st_uid != os.getuid():
+                continue
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() != "language_server":
+                    continue
+        except (ValueError, OSError):
+            continue
+        with _host_lock(pid):
+            if _host_relay(pid):
+                continue
+            creds, reason = _ls_credentials(pid)
+            found, answer = _discover(pid, creds) if creds else ([], reason)
+            if found:
+                relay = _spawn_auto_relay(found[0], pid, creds)
+                for cascade in found[1:]:  # the relay adopts them within a second; list them as served now
+                    _update_peer(f"agy:{cascade}", relay_pid=relay)
+            elif _last_scan.get(pid) != answer:  # retried at each scan: log a change only
+                _auto_relay_log(f"language server pid {pid}: no relay started: {answer}")
+            _last_scan[pid] = answer
 
 
 def agy_relay(args):
@@ -766,75 +1027,112 @@ def agy_relay(args):
     agy_pid = agy_pid or None
     _update_peer(me, conversation=cascade, relay_pid=os.getpid(), agy_pid=agy_pid, gone=False)
     print(f"{_now()} relay up pid={os.getpid()} agy={agy_pid} address={me}", flush=True)
-    reason, gone = _relay_loop(cascade, me, agy_pid)
-    _update_peer(me, relay_pid=None, gone=gone)
+    reason, gone = _relay_loop(me, agy_pid)
+    for address in _served(me, agy_pid):
+        _update_peer(address, relay_pid=None, gone=gone)
     print(f"{_now()} relay down: {reason}", flush=True)
 
 
-def _relay_loop(cascade, me, agy_pid):
+def _served(me, agy_pid):
+    """Addresses this relay delivers to: its own conversation, plus the other
+    conversations of its agy process that no other live relay serves."""
+    served = [me]
+    for peer in _host_peers(agy_pid) if agy_pid else []:
+        address = f"agy:{peer['conversation']}"
+        if address != me and (peer.get("relay_pid") == os.getpid() or not _alive(peer.get("relay_pid"))):
+            served.append(address)
+    return served
+
+
+def _discover(agy_pid, creds=None):
+    """Register the conversations the language server has loaded as peers of `agy_pid`.
+
+    Return (their ids, a one-line account of the server's answer).
+
+    GetAllCascadeTrajectories lists the conversations open in the window's
+    tabs, plus any the server read since it started, but not the whole
+    history on disk. Archived ones are left out. So a conversation is
+    reachable before any of its hooks ran.
+    """
+    import urllib.parse
+    status, body = _ls_call("GetAllCascadeTrajectories", {}, creds)
+    summaries = {}
+    if status == 200:
+        with contextlib.suppress(json.JSONDecodeError, AttributeError):
+            summaries = json.loads(body).get("trajectorySummaries") or {}
+    found, archived = [], 0
+    for cascade, info in summaries.items():
+        if not UUID_RE.match(cascade) or not isinstance(info, dict):
+            continue
+        if (info.get("annotations") or {}).get("archived"):
+            archived += 1
+            continue
+        fields = {"conversation": cascade, "agy_pid": agy_pid, "gone": False}
+        title = (info.get("annotations") or {}).get("title") or info.get("summary")
+        if isinstance(title, str) and title:
+            fields["title"] = title  # the server's copy, for a conversation whose annotations file is elsewhere
+        uri = next((w.get("workspaceFolderAbsoluteUri") for w in info.get("workspaces") or []
+                    if isinstance(w, dict)), "")
+        if uri.startswith("file://"):
+            fields["workspace"] = urllib.parse.unquote(uri[len("file://"):])
+        _update_peer(f"agy:{cascade}", **fields)
+        found.append(cascade)
+    answer = f"GetAllCascadeTrajectories HTTP {status}: {len(found)} loaded, {archived} archived"
+    data_dir = _ls_data_dir(agy_pid) if status == 200 else None
+    if data_dir:  # Desktop: conversations on disk are reachable too, the relay loads them on delivery
+        recent = [c for c in _recent_conversations(data_dir) if c[0] not in summaries]
+        for cascade, title, workspace in recent:
+            fields = {"conversation": cascade, "agy_pid": agy_pid, "gone": False}
+            fields.update({k: v for k, v in (("title", title), ("workspace", workspace)) if v})
+            _update_peer(f"agy:{cascade}", **fields)
+            found.append(cascade)
+        answer += f", {len(recent)} recent on disk"
+    return found, answer
+
+
+def _relay_loop(me, agy_pid):
     """Deliver pending messages until agy goes away; return (reason, whether agy is gone).
 
-    A message leaves the inbox only once the language server accepted it.
-    While the server is unreachable, messages go back and wait. When it
-    answers with an error, a transient one (5xx, 408, 429) is retried up to
-    RELAY_MAX_ATTEMPTS times, a failed batch is retried one message at a
-    time, and a message refused for good is set aside as .failed, so one bad
-    message never blocks the others. Messages that arrive while a batch is
-    due go with it, so one turn carries them all. When agy's pid
-    is unknown (it was not found among the hook's ancestors), the relay stops
-    once the language server has been unreachable for LS_GIVE_UP_SECONDS.
+    The relay serves every conversation of its agy process (see _served),
+    each with its own inbox. A message leaves the inbox only once the
+    language server accepted it. While the server is unreachable, messages
+    go back and wait. When it answers with an error, a transient one (5xx,
+    408, 429) is retried up to RELAY_MAX_ATTEMPTS times, a failed batch is
+    retried one message at a time, and a message refused for good is set
+    aside as .failed, so one bad message never blocks the others. Messages
+    that arrive while a batch is due go with it, so one turn carries them
+    all. When agy's pid is unknown (it was not found among the hook's
+    ancestors), the relay stops once the language server has been
+    unreachable for LS_GIVE_UP_SECONDS.
     """
-    seen, retry_at, down_since, checked_at = {}, 0.0, None, 0.0
-    attempts, solo = {}, False  # failed attempts per message id; deliver one at a time after a batch failed
+    inboxes, attempts = {}, {}  # per address: seen, retry_at, solo; failed attempts per message id
+    down_since, checked_at, discovered_at = None, 0.0, 0.0
+    desktop, new_inbox = _is_language_server(agy_pid), {"retry_at": 0.0}
     try:
         while True:
             now = time.time()
             if agy_pid and not _alive(agy_pid):
                 return "agy exited", True
-            seen = {n: seen.get(n, now) for n in _pending(me)}
-            due = any(now - t >= RELAY_GRACE_SECONDS for t in seen.values())
-            if due and now >= retry_at:
-                claimed = claim(me, limit=1 if solo else None)
-                if claimed:
-                    ids = [m["id"] for _, m in claimed]
-                    status, body, with_config = _deliver(cascade, _incoming_text([m for _, m in claimed], me))
-                    if status == 200:
-                        down_since, solo = None, False
-                        for i in ids:
-                            attempts.pop(i, None)
-                        print(f"{_now()} delivered {ids} HTTP 200 config={with_config} {body[:200]}", flush=True)
-                    elif status is None:  # language server unreachable: wait for it, however long
-                        unclaim(me, claimed)
-                        retry_at = time.time() + RELAY_RETRY_SECONDS  # counted from the failure: a call can take LS_TIMEOUT
-                        down_since = down_since or now
-                        print(f"{_now()} not delivered {ids}: {body[:200]}; "
-                              f"kept in the inbox, retry in {RELAY_RETRY_SECONDS}s", flush=True)
-                    else:
-                        # The server answered with an error. Retry a transient one a few times;
-                        # a message it keeps refusing must not be retried forever (poison pill).
-                        down_since = None
-                        for i in ids:
-                            attempts[i] = attempts.get(i, 0) + 1
-                        transient = status >= 500 or status in (408, 429)
-                        if transient and max(attempts[i] for i in ids) < RELAY_MAX_ATTEMPTS:
-                            unclaim(me, claimed)
-                            retry_at = time.time() + RELAY_RETRY_SECONDS
-                            print(f"{_now()} not delivered {ids} HTTP {status} {body[:200]}; "
-                                  f"kept in the inbox, retry in {RELAY_RETRY_SECONDS}s", flush=True)
-                        elif len(claimed) > 1:  # find the culprit: retry one message at a time
-                            unclaim(me, claimed)
-                            solo = True
-                            print(f"{_now()} not delivered {ids} HTTP {status} {body[:200]}; "
-                                  "retrying one message at a time", flush=True)
-                        else:
-                            path, _ = claimed[0]
-                            with contextlib.suppress(OSError):
-                                os.rename(path, path + ".failed")
-                            attempts.pop(ids[0], None)
-                            solo = False
-                            print(f"{_now()} dropped {ids} after HTTP {status} {body[:200]}; "
-                                  f"kept as {os.path.basename(path)}.failed", flush=True)
-            elif agy_pid is None and now - checked_at >= 30:
+            if agy_pid and now - discovered_at >= DISCOVER_SECONDS:
+                discovered_at = now
+                _discover(agy_pid)
+            attempted = False
+            if desktop and _relay_new(me, agy_pid, new_inbox):
+                attempted = True
+            for address in _served(me, agy_pid):
+                if address not in inboxes:
+                    inboxes[address] = {"seen": {}, "retry_at": 0.0, "solo": False}
+                    if address != me:
+                        _update_peer(address, relay_pid=os.getpid())
+                        print(f"{_now()} serving {address} too (same agy process)", flush=True)
+                outcome = _relay_inbox(address, inboxes[address], attempts, now, me)
+                if outcome:
+                    attempted = True
+                if outcome == "unreachable":
+                    down_since = down_since or now
+                elif outcome:
+                    down_since = None
+            if not attempted and agy_pid is None and now - checked_at >= 30:
                 checked_at = now
                 if _ls_reachable():
                     down_since = None
@@ -847,6 +1145,113 @@ def _relay_loop(cascade, me, agy_pid):
         return "interrupted", False
     except Exception as e:
         return f"error {e!r}", False
+
+
+def _relay_new(me, agy_pid, inbox):
+    """Start a Desktop conversation for the oldest message sent to agy:new; True if one was handled.
+
+    StartCascade creates the conversation in the workspace of the relay's
+    own conversation. The message then moves to the new conversation's
+    inbox, so it is delivered and retried like any other, with the config
+    borrowed from the relay's conversation. The sender gets the new address.
+    """
+    import urllib.parse
+    if time.time() < inbox["retry_at"]:
+        return False
+    claimed = claim(NEW, limit=1)
+    if not claimed:
+        return False
+    path, msg = claimed[0]
+    workspace = (_read_peer(me) or {}).get("workspace")
+    body = {"source": "CORTEX_TRAJECTORY_SOURCE_CASCADE_CLIENT"}
+    if workspace:
+        body["workspaceUris"] = ["file://" + urllib.parse.quote(workspace)]
+    status, resp = _ls_call("StartCascade", body)
+    cascade = None
+    if status == 200:
+        with contextlib.suppress(json.JSONDecodeError, AttributeError):
+            cascade = json.loads(resp).get("cascadeId")
+    if not (cascade and UUID_RE.match(cascade)):
+        if status is None or status >= 500:
+            unclaim(NEW, claimed)
+            inbox["retry_at"] = time.time() + RELAY_RETRY_SECONDS
+            print(f"{_now()} StartCascade for {msg['id']}: {status} {resp[:200]}; retry in {RELAY_RETRY_SECONDS}s", flush=True)
+        else:
+            with contextlib.suppress(OSError):
+                os.rename(path, path + ".failed")
+            print(f"{_now()} StartCascade for {msg['id']} failed: HTTP {status} {resp[:200]}; "
+                  f"kept as {os.path.basename(path)}.failed", flush=True)
+        return True
+    address = f"agy:{cascade}"
+    _update_peer(address, conversation=cascade, agy_pid=agy_pid, relay_pid=os.getpid(), gone=False,
+                 **({"workspace": workspace} if workspace else {}))
+    msg["to"] = address
+    inbox_dir, name = _dir("inbox", address), os.path.basename(path)
+    tmp = os.path.join(inbox_dir, "." + name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(msg, f, ensure_ascii=False)
+    os.rename(tmp, os.path.join(inbox_dir, name))  # atomic, as in send()
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    print(f"{_now()} started {address} for {msg['id']} from {msg['from']}", flush=True)
+    try:  # tell the sender where its message went; a sender that is gone just misses it
+        send(msg["from"], f"[bridge relay, not an agent] Your message {msg['id']} to {NEW} started "
+             f"the agy conversation {address}. Its replies come from that address.", address)
+    except SystemExit:
+        pass
+    return True
+
+
+def _relay_inbox(address, inbox, attempts, now, me):
+    """One delivery attempt for one served conversation, if a message is due.
+
+    Return None (nothing due), "delivered", "unreachable" or "refused".
+    """
+    seen = inbox["seen"] = {n: inbox["seen"].get(n, now) for n in _pending(address)}
+    if not any(now - t >= RELAY_GRACE_SECONDS for t in seen.values()) or now < inbox["retry_at"]:
+        return None
+    claimed = claim(address, limit=1 if inbox["solo"] else None)
+    if not claimed:
+        return None
+    ids = [m["id"] for _, m in claimed]
+    status, body, with_config = _deliver(address.split(":", 1)[1], _incoming_text([m for _, m in claimed], address),
+                                         fallback=me.split(":", 1)[1])
+    if status == 200:
+        inbox["solo"] = False
+        for i in ids:
+            attempts.pop(i, None)
+        print(f"{_now()} delivered {ids} to {address} HTTP 200 config={with_config} {body[:200]}", flush=True)
+        return "delivered"
+    if status is None:  # language server unreachable: wait for it, however long
+        unclaim(address, claimed)
+        inbox["retry_at"] = time.time() + RELAY_RETRY_SECONDS  # counted from the failure: a call can take LS_TIMEOUT
+        print(f"{_now()} not delivered {ids} to {address}: {body[:200]}; "
+              f"kept in the inbox, retry in {RELAY_RETRY_SECONDS}s", flush=True)
+        return "unreachable"
+    # The server answered with an error. Retry a transient one a few times;
+    # a message it keeps refusing must not be retried forever (poison pill).
+    for i in ids:
+        attempts[i] = attempts.get(i, 0) + 1
+    transient = status >= 500 or status in (408, 429)
+    if transient and max(attempts[i] for i in ids) < RELAY_MAX_ATTEMPTS:
+        unclaim(address, claimed)
+        inbox["retry_at"] = time.time() + RELAY_RETRY_SECONDS
+        print(f"{_now()} not delivered {ids} to {address} HTTP {status} {body[:200]}; "
+              f"kept in the inbox, retry in {RELAY_RETRY_SECONDS}s", flush=True)
+    elif len(claimed) > 1:  # find the culprit: retry one message at a time
+        unclaim(address, claimed)
+        inbox["solo"] = True
+        print(f"{_now()} not delivered {ids} to {address} HTTP {status} {body[:200]}; "
+              "retrying one message at a time", flush=True)
+    else:
+        path, _ = claimed[0]
+        with contextlib.suppress(OSError):
+            os.rename(path, path + ".failed")
+        attempts.pop(ids[0], None)
+        inbox["solo"] = False
+        print(f"{_now()} dropped {ids} to {address} after HTTP {status} {body[:200]}; "
+              f"kept as {os.path.basename(path)}.failed", flush=True)
+    return "refused"
 
 
 # ---------------------------------------------------------------- cli
