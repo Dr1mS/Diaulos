@@ -483,9 +483,7 @@ def claim(address, limit=None):
     claimed = []
     for name in _pending(address)[:limit]:
         dst = os.path.join(archive, name)
-        try:
-            os.rename(os.path.join(inbox, name), dst)
-        except OSError:
+        if not _move_claimed(os.path.join(inbox, name), dst):
             continue
         try:
             with open(dst, encoding="utf-8") as f:
@@ -497,6 +495,40 @@ def claim(address, limit=None):
             with contextlib.suppress(OSError):
                 os.rename(dst, dst + ".bad")  # keep it for inspection, out of the inbox
     return claimed
+
+
+def _move_claimed(src, dst):
+    """Move a message to the archive for this reader only; True if this reader got it.
+
+    On Linux the rename alone is exclusive. On Windows the test suite saw two
+    readers get the same message, so a reader first creates a marker with
+    O_EXCL, which only one of them can. A marker left by a killed reader
+    stops counting after a minute.
+    """
+    if not WINDOWS:
+        try:
+            os.rename(src, dst)
+            return True
+        except OSError:
+            return False
+    marker = os.path.join(os.path.dirname(src), "." + os.path.basename(src) + ".claim")
+    try:
+        os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        with contextlib.suppress(OSError):
+            if time.time() - os.path.getmtime(marker) > 60:
+                os.remove(marker)
+        return False
+    except OSError:
+        return False
+    try:
+        os.rename(src, dst)
+        return True
+    except OSError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(marker)
 
 
 def unclaim(address, claimed):

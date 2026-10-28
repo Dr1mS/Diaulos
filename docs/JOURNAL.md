@@ -358,6 +358,7 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - Une première version du nettoyage parcourait `/proc` et lisait la ligne de commande de chaque process, celle du vrai language server comprise. Elle a été retirée : les tests ne lisent plus `/proc`.
 - **Défaut révélé par les tests** : `_spawn_detached` laissait le fichier de log ouvert dans le process parent (`ResourceWarning`). Corrigé.
 - **GitHub Actions** (`.github/workflows/tests.yml`) : Ubuntu avec Python 3.8 et 3.12 (compilation, `bash -n` des scripts, tests), et Windows avec 3.12.
+- **Premier passage du CI** : Linux vert ; sous Windows, `test_concurrent_claims_never_share_a_message` échoue avec `58 != 40`. Deux lecteurs y ont reçu le même message, alors que le `rename` suffit sous Linux. La cause exacte n'est pas établie, faute de machine Windows. Correctif : sous Windows, un lecteur crée d'abord un marqueur `.<nom>.claim` avec `O_EXCL`, que Windows crée de façon atomique, puis fait le `rename`. Un marqueur laissé par un lecteur tué ne compte plus au bout d'une minute. Le chemin Windows, forcé sous Linux avec 4 lecteurs et 200 messages, ne donne aucun doublon.
 
 ## Pistes pour agy CLI (pour plus tard)
 

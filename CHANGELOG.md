@@ -4,6 +4,10 @@ All notable changes to Diaulos. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: two readers could get the same message. A reader now takes a message only after creating a marker with `O_EXCL`; found by the new Windows CI job.
+
 ## [0.3.0] - 2026-10-28
 
 ### Added
