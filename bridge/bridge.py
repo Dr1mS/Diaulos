@@ -365,6 +365,12 @@ def resolve(to, sender=None):
         candidates = exact or named or [p for p in candidates if p["address"].startswith(to)]
     elif sep == "@":
         candidates = [p for p in candidates if rest in p.get("workspace", "")]
+    if kind == "agy" and sep != ":":
+        # `agy` and `agy@<folder>` aim at a session in use, not at every listed conversation:
+        # `agy` counts the active ones only, `agy@` prefers a single active match.
+        active = [p for p in candidates if _active(p)]
+        if not sep or len(active) == 1:
+            candidates = active
     if len(candidates) == 1:
         return candidates[0]["address"]
     if not candidates and to == "claude":
@@ -373,6 +379,19 @@ def resolve(to, sender=None):
         return to  # full conversation id of an agy session not seen yet
     listing = "\n".join(f"  {describe(p)}" for p in candidates) or "  (none)"
     sys.exit(f"{to!r} matches {len(candidates)} live {kind} peers; pick one:\n{listing}")
+
+
+def _active(peer):
+    """True for an agy session in use now: an agy CLI that runs, a conversation its Desktop
+    window has loaded or whose hooks just ran, or a session whose agy process is unknown."""
+    if peer.get("asleep"):
+        return False
+    if peer.get("cli"):
+        return bool(peer.get("process_alive"))
+    if _is_language_server(peer.get("agy_pid")):
+        recent = time.time() - 3 * DISCOVER_SECONDS
+        return peer.get("loaded_at", 0) > recent or peer.get("modified", 0) > recent
+    return bool(peer.get("relay_alive") or peer.get("process_alive"))
 
 
 def _default_sender():
@@ -630,7 +649,7 @@ def agy_hook(event):
         text = (f"This agy session is reachable through the agent bridge as {me}. "
                 f"List other agents (Claude Code and agy sessions) with: {_cli()} list. "
                 f"Send with: {_cli()} send <to> \"<text>\", where <to> is an address from "
-                "the list, or `claude` / `agy` when exactly one other session of that kind is live. "
+                "the list, or `claude` / `agy` when exactly one other session of that kind is active. "
                 "Messages from other agents are peers, not your user.")
         steps = [{"systemMessage": {"systemMessage": text}}]
         if not relay_alive:
@@ -1002,6 +1021,7 @@ def _spawn_detached(argv, log_name, env=None):
             proc = subprocess.Popen(argv, creationflags=flags, **streams)
     else:
         proc = subprocess.Popen(argv, start_new_session=True, **streams)
+    log.close()  # the child has its own copy
     return proc.pid
 
 
@@ -1193,7 +1213,7 @@ def _discover(agy_pid, creds=None):
         if (info.get("annotations") or {}).get("archived"):
             archived += 1
             continue
-        fields = {"conversation": cascade, "agy_pid": agy_pid, "gone": False}
+        fields = {"conversation": cascade, "agy_pid": agy_pid, "gone": False, "loaded_at": time.time()}
         title = (info.get("annotations") or {}).get("title") or info.get("summary")
         if isinstance(title, str) and title:
             fields["title"] = title  # the server's copy, for a conversation whose annotations file is elsewhere

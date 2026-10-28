@@ -317,7 +317,7 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - `--output-format json` renvoie `conversation_id` et `status` ; `--print-timeout` borne le tour ;
   - `--input-format stream-json` lit une consigne par ligne ;
   - `remote-control` passe par un service distant : écarté, pour ne rien envoyer hors de la machine.
-- **Le tour perdu au premier message (piste 3)** : la doc intégrée des hooks (`agy-customizations/docs/hooks.md`) ne permet d'injecter que `systemMessage`, `userMessage` et `ephemeralMessage`. Seul `PreToolUse` peut réécrire une commande, et il doit alors trancher pour chaque commande (§5). Chez l'utilisateur (`toolPermission: always-proceed`), le rappel coûte un appel d'outil dans le premier tour, sans demande de permission. Limite gardée et documentée.
+- **Le tour perdu au premier message (piste 3)** : la doc intégrée des hooks (`agy-customizations/docs/hooks.md`) ne permet d'injecter que `systemMessage`, `userMessage` et `ephemeralMessage`. Seul `PreToolUse` peut réécrire une commande, et il doit alors trancher pour chaque commande (§7). Chez l'utilisateur (`toolPermission: always-proceed`), le rappel coûte un appel d'outil dans le premier tour, sans demande de permission. Limite gardée et documentée.
 - **Essais à la main** :
   - `agy -p "… réponds OK" --output-format json` dans `Diaulos` : `{"conversation_id":"9a0af1a2-…","status":"SUCCESS","response":"OK\n"}` en 12 s. `SessionStart`, `PreInvocation` et `Stop` ont tourné : les hooks du pont marchent sans interface ;
   - `--conversation 9a0af1a2-…` : la session retrouve son contexte (« OK »). Lancée depuis `/tmp`, elle garde son dossier ;
@@ -339,6 +339,25 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - 13:28:2x : message de `claude:Diaulos` à `307de9a1` ; `cli-run` lance `agy -p --conversation` dans `/home/user` ; `pong-cli-sleeping` arrive à 13:28:41 ;
   - `agy:new-cli@diaulos-cli` dans `Diaulos` : `pong-new-cli` à 13:28:58, puis la note du pont à 13:29:01 avec l'adresse `agy:985a99b1-…` et l'alias ;
   - agy titre la conversation « Agent Bridge Test Command », mais `agy:diaulos-cli` l'atteint toujours : `pong-alias` à 13:29:17. Environ 15 à 20 s par tour, démarrage d'agy compris.
+
+
+## 20. README, tests et intégration continue
+
+- **Relecture des README** : ils avaient grossi par ajouts successifs. Une liste était cassée (des sous-points se retrouvaient sous `agy:new`), des phrases étaient mal placées dans la section du relais automatique, Desktop était expliqué trois fois, et les détails internes (`projectEnvConfig`, `GetAllCascadeTrajectories`) se mêlaient au mode d'emploi.
+- **Réécriture, dans les deux langues** :
+  - sommaire et badges ;
+  - référence des commandes et des adresses ;
+  - une section par client agy ;
+  - les coulisses de Desktop mises à part ;
+  - versions testées clarifiées : la messagerie est validée sur la CLI, Desktop et l'IDE, et les nouveautés de Desktop sur Desktop seulement.
+- **`CHANGELOG.md`** au format Keep a Changelog : 0.1.0 (16 octobre), 0.2.0 (23 octobre) et 0.3.0 (28 octobre), d'après l'historique git.
+- **Tests dans le dépôt** (`tests/`, bibliothèque standard seulement) : 20 tests, environ 32 s.
+  - Doublures : un faux language server, qui se renomme `language_server` et lance les hooks comme ses enfants par `POST /__run`, et un faux `agy`.
+  - Les tests Desktop et CLI ne tournent que sous Linux.
+  - Garde-fou : un `list` ou un `send` lancé pendant que le drapeau `agy.auto-relay` existe fait échouer le test, car le scan lirait le vrai `/proc`. Le scan n'est testé qu'en process, avec `_language_servers` limité au faux serveur.
+  - Une première version du nettoyage parcourait `/proc` et lisait la ligne de commande de chaque process, celle du vrai language server comprise. Elle a été retirée : les tests ne lisent plus `/proc`.
+- **Défaut révélé par les tests** : `_spawn_detached` laissait le fichier de log ouvert dans le process parent (`ResourceWarning`). Corrigé.
+- **GitHub Actions** (`.github/workflows/tests.yml`) : Ubuntu avec Python 3.8 et 3.12 (compilation, `bash -n` des scripts, tests), et Windows avec 3.12.
 
 ## Pistes pour agy CLI (pour plus tard)
 

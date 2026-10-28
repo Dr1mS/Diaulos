@@ -142,7 +142,7 @@ TOOLS = [
         "name": "send",
         "description": ("Send a message to another agent through the agent bridge. `to` is an address: "
                         "the `from` of a message you received, `agy` or `claude` when exactly one other "
-                        "session of that kind is live, `agy:<name>` for an agy conversation renamed with "
+                        "session of that kind is active, `agy:<name>` for an agy conversation renamed with "
                         "/rename, `agy:new` or `agy:new@<title>` to start a new Antigravity Desktop conversation "
                         "with this message, `agy:new-cli` or `agy:new-cli@<name>` for a new agy CLI one, "
                         "`ext:<name>` for a program connected to the bridge, "

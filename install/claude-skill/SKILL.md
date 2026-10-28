@@ -25,7 +25,7 @@ With the channel, use the `send` and `list_agents` tools of the `agent-bridge` M
 
 ```
 python3 ~/.agent-bridge/bridge.py list                     # live agy and Claude sessions
-python3 ~/.agent-bridge/bridge.py send agy "<text>"        # the only other live agy session
+python3 ~/.agent-bridge/bridge.py send agy "<text>"        # the only other active agy session
 python3 ~/.agent-bridge/bridge.py send agy@<workspace-substring> "<text>"
 python3 ~/.agent-bridge/bridge.py send claude:<name> "<text>"
 ```
