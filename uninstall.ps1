@@ -1,4 +1,5 @@
-# Remove what install.ps1 added. Mailbox data in ~/.agent-bridge is kept unless -Purge is given.
+# Remove what install.ps1 added. Mailbox data and remote pairings (keys) in ~/.agent-bridge
+# are kept unless -Purge is given.
 #   powershell -ExecutionPolicy Bypass -File .\uninstall.ps1 [-Purge]
 param([switch]$Purge)
 $ErrorActionPreference = 'Stop'
@@ -104,7 +105,11 @@ if ($autorun -like '*claude-channel.cmd*') {
 }
 
 Remove-Item (Join-Path $BridgeHome 'claude-channel.ps1'), (Join-Path $BridgeHome 'claude-channel.cmd'), (Join-Path $BridgeHome 'agy-hook.cmd') -Force -ErrorAction SilentlyContinue
-$SkillDir = Join-Path $HOME '.claude\skills\agy-bridge'
-if (Test-Path $SkillDir) { Remove-Item $SkillDir -Recurse -Force; Write-Host 'removed claude skill' }
-Remove-Item (Join-Path $BridgeHome 'bridge.py'), (Join-Path $BridgeHome 'mcp_channel.py') -Force -ErrorAction SilentlyContinue
+$Bridge = Join-Path $BridgeHome 'bridge.py'
+if ($Python -and (Test-Path $Bridge)) { $ErrorActionPreference = 'Continue'; & $Python $Bridge remote stop 2>$null | Out-Null; $ErrorActionPreference = 'Stop' }
+foreach ($Name in 'agy-bridge', 'diaulos-remote') {
+    $SkillDir = Join-Path $HOME ".claude\skills\$Name"
+    if (Test-Path $SkillDir) { Remove-Item $SkillDir -Recurse -Force; Write-Host "removed claude skill $Name" }
+}
+Remove-Item (Join-Path $BridgeHome 'bridge.py'), (Join-Path $BridgeHome 'mcp_channel.py'), (Join-Path $BridgeHome 'remote.py') -Force -ErrorAction SilentlyContinue
 if ($Purge -and (Test-Path $BridgeHome)) { Remove-Item $BridgeHome -Recurse -Force; Write-Host "purged $BridgeHome" }

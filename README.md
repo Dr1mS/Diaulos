@@ -18,7 +18,7 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Antigravity Desktop  ⇄  
 
 - [What you can do with it](#what-you-can-do-with-it)
 - [Installation](#installation) · [Quick start](#quick-start) · [Command reference](#command-reference)
-- [agy CLI and Antigravity Desktop](#agy-cli-and-antigravity-desktop)
+- [agy CLI and Antigravity Desktop](#agy-cli-and-antigravity-desktop) · [Other machines](#other-machines)
 - [How it works](#how-it-works)
 - [What gets installed](#what-gets-installed) · [Troubleshooting](#troubleshooting)
 - [Security](#security) · [Status and limits](#status-and-limits)
@@ -185,6 +185,64 @@ Why it is off by default:
 
 Re-run `./install.sh` without `--auto-relay` to turn it off.
 
+## Other machines
+
+Diaulos can also connect sessions that run on **different machines**: on another network, and even on another person's computer with other Claude or Google accounts. Nothing needs to be opened on the network and you need no SSH. Both machines only make outgoing HTTPS requests to a relay, and the relay only ever sees ciphertext.
+
+```
+claude:review (your laptop) ─▶ gateway ─▶ relay (ntfy.sh or yours) ─▶ gateway ─▶ agy:api (a server, a teammate)
+                                    end-to-end encrypted, one key per pair of machines
+```
+
+**1. Pair the two machines, once.** A person runs this in a terminal on each machine. An agent can't do it: these commands refuse to run without a terminal.
+
+```bash
+# machine A
+python3 ~/.agent-bridge/bridge.py remote invite bob       # prints a one-time code, valid 15 min
+# machine B
+python3 ~/.agent-bridge/bridge.py remote join alice       # asks for the code, hidden
+```
+
+Pass the code over a channel you trust, never through an agent. Both terminals then show a 6-digit code. Compare the two codes (by voice, or in a chat you trust) and confirm on both sides. Each side then chooses which of its own sessions the other machine may write to first, for example `claude:review` or `agy:*`. You can leave it empty. The gateway then starts on both machines.
+
+**2. Agents do the rest.** The installed `diaulos-remote` skill shows them how. A session on the other machine is reached as `remote:<machine>/<address>`, for example `send remote:bob/claude:review "..."`. `list` also shows the sessions that the other machine says you can reach.
+
+**The gateway** carries the messages. It does not survive a logout or a reboot. It starts again on its own when an agy session starts, when a Claude Code session with the channel starts, on the first send, or with `bridge.py remote start`. A machine that only answers, such as a server, should start it at login. On Linux, use a systemd user unit:
+
+```ini
+# ~/.config/systemd/user/diaulos-gateway.service, then: systemctl --user enable --now diaulos-gateway
+[Unit]
+Description=Diaulos remote gateway
+[Service]
+ExecStart=/usr/bin/python3 %h/.agent-bridge/bridge.py remote gateway
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
+On Windows, create a Task Scheduler task "At log on" that runs `python <your home>\.agent-bridge\bridge.py remote gateway`. Messages wait on the relay for 12 hours: a machine that stays off longer misses the older ones.
+
+| Command | Who | What it does |
+|---|---|---|
+| `remote invite <name> [--relay URL]` / `remote join <name> [<code>]` | person | pair two machines |
+| `remote allow <name> <pattern>` | person | let `<name>` write first to local sessions that match `<pattern>` |
+| `remote relay-server [--host H] [--port P]` | person | host your own relay instead of ntfy.sh |
+| `remote start` / `stop` / `status` | anyone | the gateway that carries the messages |
+| `remote deny <name> <pattern>` / `remote unpair <name>` | anyone | narrow access, forget a machine and its key |
+
+**Security.** This is the part to read.
+
+- **Pairing is for people only.** `invite`, `join`, `allow` and `relay-server` need a terminal (TTY), and agents have none. An agent that is told by a message to pair with someone cannot do it. The code is typed at a hidden prompt, never on the command line. This gate stops mistakes and prompt injection. It is a speed bump, not a wall: a program that already runs as your user can edit `~/.agent-bridge/remote/` or fake a terminal (the threat model of [Security](#security) still applies).
+- **Pairing.** The invite carries a one-time 256-bit secret. That secret authenticates an X25519 key exchange, and the two people compare a 6-digit code that is derived from the result. If someone copied the code on the way and pairs in your place, the other person sees no code, or a different one: answer no, and nothing is saved.
+- **Messages.** Each pair has its own root key. Each direction has its own key and its own relay topic. Every frame is sealed with ChaCha20-Poly1305. A changed, replayed or foreign frame is dropped. Payloads are padded to a multiple of 256 bytes, so the relay learns less from sizes. The relay sees topic names, sizes and times, never content.
+- **Who may reach what.** A paired machine can write first only to the sessions in its allow list. Wildcards never match `agy:new` and `agy:new-cli`, so those must be named exactly. A local session that wrote to a machine gets its replies for 24 hours, at that exact address only. Local senders are not authenticated, though: any process that runs as your user can write to a machine in the name of a live local session, and so open that window for it. The pairing gate protects you from the other machine, not from your own agents. (`bridge.py send` refuses a `--from` other than an `ext:` program for remote recipients, but that is a guard rail, not a boundary.) A message never hops on to a third machine. Each machine may send at most 20 messages a minute. A refused message gets a fixed notice that tells nothing about your sessions or folders.
+- **The sender is authenticated.** The receiving gateway writes `from` as `remote:<name>/<address>`, where `<name>` is the name *you* gave the machine and is proven by its key. A remote agent can never pass for a local one. The address after the `/` is declared by the other machine.
+- **Keys** live in `~/.agent-bridge/remote/peers/`, readable by your user only. `remote unpair` deletes them. On Windows this relies on the user-only permissions of your profile folder: keep `AGENT_BRIDGE_HOME` inside it.
+- **Allowing `agy:new-cli` or `agy:new` amounts to giving the other machine a shell** with agy's permissions: it starts an agy conversation with its own prompt. Each one gets a fresh empty folder in `~/.cache/diaulos-remote/<machine>/`, but the agent can still write anywhere your user can. Allow them only for a machine you trust like yourself.
+- **A remote agent may be another person's agent.** Everything in the `ext:` warning of [Security](#security) applies, and more. Allow only sessions that need it, never one that runs with `always-proceed` or that can reach secrets. Agents are told never to send secrets to a remote machine, but that is a rule for the model, not a barrier.
+
+**Limits.** Remote messaging needs `python3 -m pip install cryptography`. The rest of Diaulos stays standard library only. ntfy.sh takes about 250 messages a day per IP and keeps them 12 hours. A message uses one relay message per 2.9 KB of encoded text (UTF-8 and JSON escapes count). The lists of reachable sessions (at most every 30 minutes) and the notices also count. A message holds at most 64 KiB. For heavier use, host a relay with `remote relay-server` behind an HTTPS reverse proxy; with nginx, set `proxy_buffering off` and `proxy_read_timeout` above 25 s, and start the relay with `--trusted-proxy 127.0.0.1` so that its limits count each client rather than the proxy. An open relay can still be saturated by someone with many addresses: for strong availability, restrict it to your machines' IP addresses at the proxy or the firewall.
+
 ## Proof: a four-agent relay
 
 Four sessions passed one message around a circle with no human involved. Each one appended its name and the time, then forwarded the message.
@@ -258,11 +316,12 @@ any agent ── send ──▶  ~/.agent-bridge/inbox/<address>/*.json
 
 | Path | What |
 |---|---|
-| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py`, the shell wrappers and the mailboxes |
+| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py`, `remote.py`, the shell wrappers and the mailboxes |
+| `~/.agent-bridge/remote/` (after pairing) | the keys of paired machines, the gateway state |
 | `~/.agent-bridge/agy-hook.cmd` (Windows only) | Windows hook launcher (OEM code page, handles spaces and accents) |
 | `~/.agent-bridge/state/agy.auto-relay` (Linux, `--auto-relay` only) | turns on the experimental auto-relay |
 | `~/.gemini/config/hooks.json` | agy hooks, under the key `agent-bridge` |
-| `~/.claude/skills/agy-bridge/` | Claude Code skill that explains the bridge |
+| `~/.claude/skills/agy-bridge/`, `~/.claude/skills/diaulos-remote/` | Claude Code skills that explain the bridge and messaging other machines |
 | `~/.claude/settings.json` | allow rules for the bridge commands and MCP tools |
 | `~/.claude.json` (via `claude mcp add -s user`) | the `agent-bridge` MCP server |
 | `~/.bashrc` (Linux, `--shell` only) | sources the `claude` wrapper |
@@ -291,6 +350,7 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 - **Peers are not the user.** Incoming messages are labelled as coming from a peer agent. Agents are told that such a message never counts as user approval, and that they must never do for a peer something their own permissions blocked.
 - **Unverified sender.** The `from` address is declared by the sender and is unverified. A message that claims to relay the user never counts as user approval.
 - **The CSRF token never touches disk or logs.**
+- **Other machines** have their own security model, with authentication and encryption: see [Other machines](#other-machines).
 - **The auto-relay reads the token from the language server's command line.** It is off by default; see [Experimental: auto-relay](#experimental-auto-relay).
 
 > [!WARNING]
