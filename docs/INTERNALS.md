@@ -39,7 +39,7 @@ All state lives in `~/.agent-bridge/` (`AGENT_BRIDGE_HOME`): `inbox/`, `archive/
 
 ## Claude Code side
 
-- `mcp_channel.py` is an MCP server that declares the `claude/channel` capability (research preview) and pushes each message as `notifications/claude/channel`. The session sleeps until a message arrives: no polling, no periodic wake-up, no cache reload. It also provides the `send` and `list_agents` tools.
+- `mcp_channel.py` is an MCP server that declares the `claude/channel` capability (research preview) and pushes each message as `notifications/claude/channel`. The session does no polling and has no periodic wake-up: it sleeps until a message arrives (the server checks the inbox folder every second). It also provides the `send` and `list_agents` tools.
 - The channel must be enabled at launch: `claude --dangerously-load-development-channels server:agent-bridge`. The `--shell` / `-Shell` option of the installer does it for a plain `claude`:
   - Linux: a function in `~/.bashrc`. Bypass it with `command claude`.
   - Windows PowerShell: a function in your profile. Windows cmd: a `doskey` macro loaded by cmd's `AutoRun`. Bypass both with `claude.cmd`.
@@ -50,9 +50,9 @@ All state lives in `~/.agent-bridge/` (`AGENT_BRIDGE_HOME`): `inbox/`, `archive/
 
 ## Delivery
 
-- **Addresses.** A message to an unknown `claude:<name>` is refused with the list of live peers, so nothing is lost silently. An agent cannot message itself. Concrete addresses are strictly validated: path separators (`/`, `\`) and `..` are forbidden.
+- **Addresses.** A message to an unknown `claude:<name>` is refused with the list of live peers, so nothing is lost silently. An agent cannot message itself. Concrete addresses are strictly validated: path separators are forbidden, and an address cannot end in `.` or `..`.
 - **Claims.** Each message is written to a temporary JSON file and renamed atomically. A reader claims messages by moving them into `archive/` before reading, so two readers never get the same message. On Windows, a reader first creates a `.claim` marker with `O_EXCL`, because the rename alone was seen to let two readers through.
-- **Failures.** If delivery fails (language server unreachable, HTTP error), messages return to the inbox and the relay retries every 10 s; a message refused for good is kept as `.failed`, so one bad message never blocks the others. If the language server accepts a message but its answer is lost (timeout), the message is sent again: delivery is at least once. Messages that arrive while a batch waits are delivered together in that batch.
+- **Failures.** If delivery fails (language server unreachable, HTTP error), messages return to the inbox and the relay retries every 10 s; a message refused for good is kept as `.failed`, so one bad message never blocks the others. If the language server accepts a message but its answer is lost (timeout), the message is sent again, so a duplicate is possible. A reader killed between the claim and the delivery loses the message. Messages that arrive while a batch waits are delivered together in that batch.
 - **Replies.** Every message carries the sender's `from` address. In agy it is filled in from `ANTIGRAVITY_CONVERSATION_ID`.
 - **History.** `log.jsonl` records everything sent and rotates to `log.jsonl.1` beyond 10 MB. Archived messages older than 30 days are purged.
 
@@ -67,6 +67,24 @@ All state lives in `~/.agent-bridge/` (`AGENT_BRIDGE_HOME`): `inbox/`, `archive/
 - **Policy.** A message is delivered if its resolved address matches the pair's allow list (`fnmatch`; `agy:new` and `agy:new-cli` only by exact name), or if that exact address wrote to the machine in the last 24 h and was a live session then. Refusals and unknown targets get the same notice. At most 20 inbound messages and one notice a minute per machine. A sender from another machine can never be forwarded to a third one.
 - **Gateway.** One process for every pair (`bridge.py remote gateway`). Outbound: it claims one message at a time from each `remote:<machine>` inbox and publishes its frames, paced by a token bucket (55 at once, then one every 5 s, ntfy.sh's limits). Inbound: one streaming subscription per relay (`/<topics>/json?since=…`), reconnected on errors. A separate thread writes a heartbeat to `remote/gateway.json` every 10 s; a gateway counts as running only with a heartbeat under 60 s and a live pid. State (sequence numbers, `since`, reply contacts) is written with `fsync`. It starts after pairing, from the agy `SessionStart` hook (not on Windows), when the MCP channel starts, and on a send.
 - **Relay.** `remote relay-server` implements the part of the ntfy API the gateway uses: `POST /<topic>` and `GET /<topic>[,…]/json?since=<all|time|id|duration>[&poll=1]`. Messages stay 12 h within a 64 MiB budget and 500 per topic. Per client (/64 for IPv6; the last `X-Forwarded-For` hop behind `--trusted-proxy`): a token bucket shared by posts and subscriptions, and at most 8 subscriptions. Connections are capped per address and in total, and a request that is not complete after 30 s is closed.
+
+## What gets installed
+
+| Path | What |
+|---|---|
+| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py`, `remote.py`, the shell wrappers and the mailboxes |
+| `~/.agent-bridge/remote/` (after pairing) | the keys of paired machines and the gateway state |
+| `~/.agent-bridge/agy-hook.cmd` (Windows) | Windows hook launcher (OEM code page, handles spaces and accents) |
+| `~/.agent-bridge/state/agy.auto-relay` (Linux, `--auto-relay`) | turns on the experimental auto-relay |
+| `~/.gemini/config/hooks.json` | agy hooks, under the key `agent-bridge` |
+| `~/.claude/skills/agy-bridge/`, `~/.claude/skills/diaulos-remote/` | Claude Code skills |
+| `~/.claude/settings.json` | allow rules for the bridge commands and MCP tools |
+| `~/.claude.json` (via `claude mcp add -s user`) | the `agent-bridge` MCP server |
+| `~/.bashrc` (Linux, `--shell`) | sources the `claude` wrapper |
+| PowerShell profile (Windows, `-Shell`) | dot-sources the `claude` wrapper |
+| `HKCU\Software\Microsoft\Command Processor\AutoRun` (Windows, `-Shell`) | the `claude` doskey macro, added after any existing command |
+
+Every config file that is edited is backed up first as `<file>.bak-agent-bridge`. The uninstaller reverts all of the above; the mailboxes and the keys stay unless `--purge` (`-Purge`). A systemd unit or a scheduled task you created for the gateway is yours to remove.
 
 ## Windows specifics
 

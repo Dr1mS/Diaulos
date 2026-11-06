@@ -24,7 +24,6 @@ jobs:
       - name: Compile
         run: python -m compileall -q bridge tests
       - name: Install cryptography (remote messaging tests)
-        if: matrix.python != '3.8'
         run: python -m pip install cryptography
       - name: Check the shell scripts
         run: bash -n install.sh && bash -n uninstall.sh
