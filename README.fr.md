@@ -22,7 +22,7 @@ agy (~/projets/api)  ⇄  agy (~/projets/web)  ⇄  Antigravity Desktop  ⇄  Cl
 - [Fonctionnement](#fonctionnement)
 - [Ce qui est installé](#ce-qui-est-installé) · [Dépannage](#dépannage)
 - [Sécurité](#sécurité) · [État et limites](#état-et-limites)
-- [Développement](#développement) · [Historique des versions](CHANGELOG.md) · [Journal de labo](docs/JOURNAL.md)
+- [Développement](#développement) · [Historique des versions](CHANGELOG.md) · [Journal de labo](docs/JOURNAL.md) · [État de l'art](docs/ETAT-DE-L-ART.md)
 
 ## À quoi ça sert
 
