@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
+    </marker>
+    <linearGradient id="box" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2129"/>
+      <stop offset="1" stop-color="#161b22"/>
+    </linearGradient>
+  </defs>
+  <rect width="960" height="420" rx="16" fill="#0d1117"/>
+  <text x="32" y="42" fill="#e6edf3" font-size="20" font-weight="700">How a message travels</text>
+  <text x="32" y="64" fill="#8b949e" font-size="13">a file mailbox, and each tool's own way to wake up</text>
+
+  <!-- senders -->
+  <g font-size="13">
+    <rect x="32" y="110" width="190" height="52" rx="10" fill="url(#box)" stroke="#d97757"/>
+    <text x="48" y="133" fill="#d97757" font-weight="700">Claude Code</text>
+    <text x="48" y="151" fill="#8b949e">MCP tool send</text>
+    <rect x="32" y="178" width="190" height="52" rx="10" fill="url(#box)" stroke="#58a6ff"/>
+    <text x="48" y="201" fill="#58a6ff" font-weight="700">agy CLI / Desktop</text>
+    <text x="48" y="219" fill="#8b949e">bridge.py send</text>
+    <rect x="32" y="246" width="190" height="52" rx="10" fill="url(#box)" stroke="#3fb950"/>
+    <text x="48" y="269" fill="#3fb950" font-weight="700">script · CI · bot</text>
+    <text x="48" y="287" fill="#8b949e">ext:&lt;name&gt;</text>
+    <rect x="32" y="314" width="190" height="52" rx="10" fill="url(#box)" stroke="#bc8cff"/>
+    <text x="48" y="337" fill="#bc8cff" font-weight="700">another machine</text>
+    <text x="48" y="355" fill="#8b949e">through its gateway</text>
+  </g>
+  <g stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <path d="M222,136 C270,136 280,225 318,232"/>
+    <path d="M222,204 C270,204 280,232 318,236"/>
+    <path d="M222,272 C270,272 280,242 318,240"/>
+    <path d="M222,340 C270,340 280,250 318,244"/>
+  </g>
+
+  <!-- mailbox -->
+  <rect x="320" y="170" width="250" height="140" rx="14" fill="url(#box)" stroke="#30363d" stroke-width="1.5"/>
+  <text x="445" y="200" fill="#e6edf3" font-size="15" font-weight="700" text-anchor="middle">~/.agent-bridge</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" fill="#8b949e">
+    <text x="342" y="228">inbox/&lt;address&gt;/*.json</text>
+    <text x="342" y="248">atomic write · claimed once</text>
+    <text x="342" y="268">archive/ · log.jsonl</text>
+    <text x="342" y="288">delivered at least once</text>
+  </g>
+
+  <!-- wake paths -->
+  <g stroke="#8b949e" stroke-width="1.6" fill="none" marker-end="url(#a)">
+    <path d="M570,226 C610,226 610,128 650,128"/>
+    <path d="M570,234 C620,234 615,196 650,196"/>
+    <path d="M570,246 C620,246 615,264 650,264"/>
+    <path d="M570,254 C610,254 610,332 650,332"/>
+  </g>
+  <g font-size="13">
+    <rect x="652" y="102" width="276" height="52" rx="10" fill="url(#box)" stroke="#d97757"/>
+    <text x="668" y="125" fill="#e6edf3" font-weight="700">Claude, idle</text>
+    <text x="668" y="143" fill="#8b949e">MCP channel pushes the message</text>
+    <rect x="652" y="170" width="276" height="52" rx="10" fill="url(#box)" stroke="#58a6ff"/>
+    <text x="668" y="193" fill="#e6edf3" font-weight="700">agy, idle</text>
+    <text x="668" y="211" fill="#8b949e">relay → its language server starts a turn</text>
+    <rect x="652" y="238" width="276" height="52" rx="10" fill="url(#box)" stroke="#58a6ff"/>
+    <text x="668" y="261" fill="#e6edf3" font-weight="700">agy CLI, terminal closed</text>
+    <text x="668" y="279" fill="#8b949e">one turn with agy -p --conversation</text>
+    <rect x="652" y="306" width="276" height="52" rx="10" fill="url(#box)" stroke="#bc8cff"/>
+    <text x="668" y="329" fill="#e6edf3" font-weight="700">remote:&lt;machine&gt;/…</text>
+    <text x="668" y="347" fill="#8b949e">gateway encrypts it, relay carries it</text>
+  </g>
+  <text x="480" y="398" fill="#8b949e" font-size="13" text-anchor="middle">No polling, no keystrokes: a session wakes only when a message is waiting for it.</text>
+</svg>
