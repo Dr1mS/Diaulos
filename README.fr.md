@@ -377,6 +377,7 @@ Avant de modifier un fichier de configuration, l'installeur en garde une copie `
   - sur une vraie fenêtre Antigravity Desktop : le relais partagé, le relais automatique lancé par `list`, le réveil d'une conversation pas chargée depuis le lancement, `agy:new` avec un titre et un workspace ;
   - avec la CLI agy : le réveil d'une conversation dont le terminal est fermé, et `agy:new-cli` avec un nom.
   - Pas encore vérifiés : les nouveautés Desktop sur l'IDE, et le hook `Stop` en écoute sous Desktop et IDE.
+- Autres machines (6 novembre 2026) : cette machine Linux et un second ordinateur sur un autre réseau, appairés par ntfy.sh. Une session Claude Code de chaque côté, un refus et son avis, puis un message et sa réponse.
 - Windows 11, Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14 : hooks, réveil d'agy inactif par le relais, réveil d'une session Claude interactive par le canal MCP, messages dans les deux sens.
 
 Le journal complet des expériences, avec chaque essai, message d'erreur et choix de conception, est dans [docs/JOURNAL.md](docs/JOURNAL.md). Les changements par version sont dans [CHANGELOG.md](CHANGELOG.md).

@@ -377,6 +377,7 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
   - on a real Antigravity Desktop window: the shared relay, the auto-relay started by `list`, waking a conversation not loaded since launch, `agy:new` with a title and a workspace;
   - with the agy CLI: waking a conversation whose terminal is closed, and `agy:new-cli` with a name.
   - Not verified yet: the newer Desktop features on the IDE, and the listening `Stop` hook on Desktop and IDE.
+- Other machines (2026-11-06): this Linux machine and a second computer on another network, paired through ntfy.sh. A Claude Code session on each side, a refusal and its notice, then a message and its reply.
 - Windows 11, Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14: hooks, relay waking an idle agy, MCP channel waking an interactive Claude session, and messages both ways.
 
 The full lab notebook, in French, with every experiment, error message and design decision, is in [docs/JOURNAL.md](docs/JOURNAL.md). Changes by version are in [CHANGELOG.md](CHANGELOG.md).
