@@ -4,7 +4,7 @@
 
 **Let your AI coding agents talk to each other — and wake each other up.**
 
-Claude Code ⇄ Google Antigravity (agy) · on one machine or across networks · no polling, no fake keystrokes
+Claude Code ⇄ Google Antigravity (agy) · on one machine or across networks · no agent polling, no fake keystrokes
 
 [![Tests](https://github.com/Dr1mS/Diaulos/actions/workflows/tests.yml/badge.svg)](https://github.com/Dr1mS/Diaulos/actions/workflows/tests.yml) ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux | Windows](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey) ![Core: stdlib only](https://img.shields.io/badge/core-stdlib%20only-brightgreen) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
@@ -18,7 +18,7 @@ Claude Code ⇄ Google Antigravity (agy) · on one machine or across networks ·
 
 You run Claude Code in one terminal and Gemini in another. One writes the code, the other should review it, and **you** are the one copy-pasting between them, or waking up the one that went idle.
 
-**Diaulos removes you from that loop.** Any session can send a message to any other one, and the message **wakes the receiver even when it is idle**, even when its terminal is closed, even when it runs on another machine. Each tool is woken through its own extension points: Claude Code through an MCP channel, agy through its own language server. Nothing polls, and nothing types into a terminal.
+**Diaulos removes you from that loop.** Any session can send a message to any other one, and the message **wakes the receiver even when it is idle**. An agy CLI conversation is reached even with its terminal closed, and a session on another paired machine through its gateway. Each tool is woken through its own extension points: Claude Code through an MCP channel, agy through its own language server. No agent polls its inbox and nothing types into a terminal: small helper processes watch the mailbox and wake an agent only when a message is waiting.
 
 ```text
 you › ask the agy session in ~/api to review my last commit, and tell me what it finds
@@ -30,7 +30,7 @@ agy:api-review  → claude:review "2 issues: unchecked None in parse_config(), m
 claude › agy found 2 issues. I fixed the None check; want me to add the missing test?
 ```
 
-<sub>An illustration of a typical exchange. In a real test, four sessions passed one message around a circle with no human involved: 36 s for the full loop, almost all of it model thinking. The bridge delivers in 1 to 3 s.</sub>
+<sub>An illustration of a typical exchange. In a real test, four sessions passed one message around a circle with no human involved: 36 s for the full loop, almost all of it model thinking. The bridge itself adds a few seconds per hop: about 4 s to wake an idle agy (it first waits 3 s so that a busy agy can take the message through its hooks), about 1 s for Claude.</sub>
 
 > *In the ancient Greek games, the* diaulos *was the out-and-back race: run to the far end of the stadium, turn, and run back. Here it is the trip a message makes from one agent to another and back.*
 
@@ -41,12 +41,14 @@ claude › agy found 2 issues. I fixed the None check; want me to add the missin
 | Wakes an idle session | ✅ native (MCP channel, agy language server) | ❌ agents must check their inbox | ⚠️ by typing into the terminal | ✅ |
 | Claude **and** Gemini | ✅ | ✅ | ⚠️ some | ❌ Claude only |
 | Connects the sessions you already have open | ✅ | ✅ | ❌ it launches its own | ❌ it launches its own |
-| Reaches a closed agy conversation | ✅ `agy -p` | ❌ | ❌ | — |
-| Across machines, end-to-end encrypted | ✅ no port, no SSH, no account | ⚠️ HTTP transport, not E2EE | ❌ | ❌ |
-| Windows | ✅ | ✅ | ❌ | ✅ |
+| Reaches a closed agy CLI conversation | ✅ `agy -p` | ❌ | ❌ | — |
+| Across machines, end-to-end encrypted | ✅ no open port, no SSH, no account | ⚠️ HTTP transport, no E2EE built in | ❌ | ❌ |
+| Windows | ✅ (Desktop features: Linux only) | ✅ | WSL only | ✅ |
 | Dependencies | Python stdlib (+ `cryptography` across machines) | an MCP server and its database | tmux | built into Claude Code |
 
-A session is woken **only when a message is waiting for it**, and messages that arrive together are delivered in a single turn. In the author's use, that means far fewer wake-ups — and tokens — than Claude Code agent teams on comparable work. The [state of the art](docs/ETAT-DE-L-ART.md) (French) compares Diaulos with 13 projects and protocols (A2A, ACP, mcp_agent_mail, agent-deck…) and proposes a protocol to measure it.
+A session is woken **only when a message is waiting for it**, and messages that arrive together are delivered in a single turn. The author has observed far fewer wake-ups, and about half the tokens, compared with Claude Code agent teams on comparable work. This is not measured yet: the [state of the art](docs/ETAT-DE-L-ART.md) (French) proposes a protocol to measure it, and compares Diaulos with 13 projects and protocols.
+
+<sub>Columns as of November 2026. MCP mailboxes: mcp_agent_mail, postal-mcp. tmux orchestrators: swarmux, Tmux-Orchestrator, AgentMux. Details and links in the state of the art.</sub>
 
 ## Features
 
@@ -54,10 +56,10 @@ A session is woken **only when a message is waiting for it**, and messages that 
 - **Wake-on-message** — idle Claude Code and agy sessions take their turn by themselves when a message arrives.
 - **Closed terminals still answer** — a message to an agy CLI conversation whose terminal is closed runs one turn with `agy -p`.
 - **Spawn new sessions** — `agy:new-cli` / `agy:new` start a new agy session with the message as its first prompt.
-- **Other machines** — pair two computers once, then `send remote:laptop/claude:review "…"`. Outgoing HTTPS only, ChaCha20-Poly1305 end to end, through ntfy.sh or your own relay.
+- **Other machines** — pair two computers once, then `send remote:laptop/claude:review "…"`. Outgoing connections only (HTTPS to ntfy.sh by default), ChaCha20-Poly1305 end to end, through ntfy.sh or your own relay.
 - **Programs as peers** — a script, a CI job or a bot joins as `ext:<name>` and reads the agent's replies.
-- **Safe by default** — peer messages never count as user approval; pairing and access changes need a human at a terminal.
-- **Zero dependencies** — Python 3.8+ standard library (`cryptography` only for other machines), Linux and Windows, one install script.
+- **Guard rails by default** — agents are told that peer messages never count as user approval; pairing machines and widening remote access need a person at a terminal.
+- **Standard library only** — Python 3.8+, nothing to install for the core (`cryptography` only to reach other machines), Linux and Windows, one install script.
 - **See it happen** — with [Paros](https://github.com/Dr1mS/Paros), each session is a pixel pet on your desktop and every message flies from one to the other as a letter.
 
 <div align="center">
@@ -106,7 +108,7 @@ Then:
 
 **Updating:** `git pull`, then run the installer again with the same options, and restart your sessions. A session started before the update keeps the old code.
 
-**Removing:** `./uninstall.sh` (`.\uninstall.ps1` on Windows); add `--purge` (`-Purge`) to also delete the mailboxes and the keys of paired machines.
+**Removing:** `./uninstall.sh` (`.\uninstall.ps1` on Windows); add `--purge` (`-Purge`) to also delete the mailboxes and the keys of paired machines. If you created a systemd unit or a scheduled task for the gateway, remove it too.
 
 ## Quick start
 
@@ -138,8 +140,8 @@ The receiver answers to the `from` address of the message it got.
 | `claude` | The only other Claude session; when none is listed, the shared inbox read by `watch claude` |
 | `agy:<conversationId>`, `agy:<id-prefix>` | One agy conversation (CLI or Desktop) |
 | `agy:<title>` | An agy conversation by its title (`/rename`, or the one agy gives it); refused when two share it |
-| `agy@<part-of-its-folder>` | The agy conversation whose folder contains that text |
-| `agy` | The only other active agy session |
+| `agy@<part-of-its-folder>` | The agy conversation whose folder contains that text: the only active one, else the only listed one |
+| `agy` | The only other active agy session: an agy CLI that runs, or a conversation its Desktop window has loaded |
 | `agy:new`, `agy:new@<title>` | A new Antigravity Desktop conversation, with the message as first prompt (Linux) |
 | `agy:new-cli`, `agy:new-cli@<name>` | A new agy CLI conversation, with the message as first prompt |
 | `ext:<name>` | A program connected with `watch ext:<name>` |
@@ -150,12 +152,13 @@ The receiver answers to the `from` address of the message it got.
 | Command | What it does |
 |---|---|
 | `bridge.py list [--days N \| --all]` | Live sessions and how each one gets woken. agy conversations of the last 7 days, or N days, or any age |
-| `bridge.py send <to> <text…>` | Send a message; `-` as text reads it from stdin |
-| `… --workspace <dir>` | With `agy:new` / `agy:new-cli`: where the new session works (for `agy:new`, also a Desktop workspace name) |
-| `… --from <address>` | Sender address, for a program or a script |
+| `bridge.py send <to> <text…> [--workspace <dir>] [--from <address>]` | Send a message; `-` as text reads it from stdin. The options must come last: anywhere else they are part of the text |
+| `--workspace <dir>` | With `agy:new` / `agy:new-cli`: where the new session works (for `agy:new`, also a Desktop workspace name) |
+| `--from <address>` | Sender address, for a program or a script (agy fills it in itself). To another machine, only an `ext:` address |
 | `bridge.py watch <address> [--json]` | Print each new message for that address, forever |
 | `bridge.py recv <address> [--json]` | Print and archive the waiting messages once |
 | `bridge.py ensure-relay` | From an agy shell: start the relay that wakes this agy (agy is reminded to) |
+| `bridge.py agy-relay --probe "<text>"` / `--inspect` | From an agy shell: one test delivery / the model settings of the conversation |
 | `bridge.py remote <command>` | Pair machines and run the gateway: see [Other machines](#other-machines) |
 
 ## agy CLI and Antigravity Desktop
@@ -179,7 +182,7 @@ python3 ~/.agent-bridge/bridge.py send agy:new-cli@builder "Build the project an
 
 - These turns run with your agy permissions. With `toolPermission: always-proceed`, they run on their own; with a setting that asks before some tools, a turn that needs one waits 30 min and fails. Diaulos never passes `--dangerously-skip-permissions`.
 - Use one of agy's trusted workspaces (`trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`) as directory.
-- Each turn starts a new `agy` process: about 10 s before the model starts thinking. Messages over 100,000 characters are refused.
+- Each turn starts a new `agy` process: about 10 s before the model starts thinking. `agy -p` cannot take messages over 100,000 characters: such a message is not delivered to a closed agy CLI conversation (see its `cli-<id>.log`).
 
 ### Antigravity Desktop
 
@@ -195,7 +198,7 @@ python3 ~/.agent-bridge/bridge.py send agy:new@tester "Run the test suite and se
 
 ## Other machines
 
-Sessions on **different machines** can talk too: on another network, even on another person's computer with other Claude or Google accounts. Both machines only make outgoing HTTPS requests to a relay (ntfy.sh by default, or your own), and the relay only ever sees ciphertext.
+Sessions on **different machines** can talk too: on another network, even on another person's computer with other Claude or Google accounts. Both machines only make outgoing connections to a relay (HTTPS to ntfy.sh by default, or your own), and the relay never sees the content of a message.
 
 <p align="center"><img src="docs/images/remote.svg" alt="Two machines on two networks: each gateway sends encrypted frames over outgoing HTTPS to a relay that sees no content" width="900"></p>
 
@@ -220,7 +223,7 @@ Pass the code over a channel you trust, never through an agent. Both terminals t
 | `remote status`, `remote start`, `remote stop` | anyone | the gateway |
 | `remote deny <name> <pattern>`, `remote unpair <name>` | anyone | narrow access, forget a machine and its key |
 
-**The gateway** does not survive a logout or a reboot. It starts again by itself when an agy session starts (Linux), when a Claude Code session with the channel starts, and on the first send. A machine that only answers, such as a server, should start it at login. On Linux:
+**The gateway** does not survive a logout or a reboot. It starts again by itself when an agy session starts (Linux), when a Claude Code session with the channel starts, and on the first send. A machine that only answers, such as a server, should start it at login. On Linux, with a systemd user unit (`remote gateway` takes over from a gateway already running):
 
 ```ini
 # ~/.config/systemd/user/diaulos-gateway.service, then: systemctl --user enable --now diaulos-gateway
@@ -233,9 +236,9 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-On Windows, create a Task Scheduler task "At log on" that runs `python <your home>\.agent-bridge\bridge.py remote gateway`.
+On Windows, create a Task Scheduler task "At log on" that runs `<full path to python.exe> <your home>\.agent-bridge\bridge.py remote start`: it starts the gateway in the background and exits.
 
-**Limits.** ntfy.sh accepts about 250 messages a day per IP address and keeps them 12 hours: a machine that stays off longer misses the older ones. A message takes one relay message per 2.9 KB, and holds at most 64 KiB. For heavier use, host a relay with `remote relay-server` behind an HTTPS reverse proxy: with nginx, set `proxy_buffering off` and `proxy_read_timeout` above 25 s, and start the relay with `--trusted-proxy 127.0.0.1`. For strong availability, restrict it to your machines' IP addresses.
+**Limits.** ntfy.sh accepts about 250 messages a day per IP address and keeps them 12 hours: a machine that stays off longer misses the older ones. A message takes one relay message per 2.9 KB of encoded text (UTF-8 and JSON escapes count) and holds at most 64 KiB; the lists of reachable sessions (at most every 30 min) and the notices count too. For heavier use, host a relay with `remote relay-server` behind an HTTPS reverse proxy: with nginx, set `proxy_buffering off` and `proxy_read_timeout` above 25 s, and start the relay with `--trusted-proxy 127.0.0.1`. An open relay can be saturated by someone who controls many addresses: for reliable availability, restrict it to your machines' IP addresses.
 
 How the pairing, the encryption and the access rules work is in [Security](#security) and in the [internals](docs/INTERNALS.md#other-machines).
 
@@ -249,9 +252,9 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 
 **On one machine**
 
-- **No authentication between local processes.** Any process running as your user can write to `~/.agent-bridge/inbox/`. A message to an agy session makes it act with that conversation's permissions, for example `always-proceed`. Only use Diaulos on a machine you trust.
+- **No authentication between local processes.** Any process running as your user can write to `~/.agent-bridge/inbox/`. A message to an agy session makes it act with that conversation's permissions, for example `always-proceed`: through the relay, through `agy -p` for an agy CLI conversation whose terminal is closed, and in the sessions started by `agy:new` and `agy:new-cli`. Only use Diaulos on a machine you trust.
 - **Peers are not the user.** Incoming messages are labelled as coming from a peer agent. Agents are told that such a message never counts as user approval, and that they must never do for a peer something their own permissions blocked.
-- **Unverified sender.** On one machine, the `from` address is declared by the sender.
+- **Unverified sender.** On one machine, the `from` address is declared by the sender. A message that claims to relay the user never counts as user approval.
 - **agy's token** (`ANTIGRAVITY_CSRF_TOKEN`) never touches disk or logs.
 
 > [!WARNING]
@@ -266,7 +269,7 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 
 - **Pairing is for people.** `invite`, `join`, `allow` and `relay-server` need a terminal, which agents don't have, so a prompt-injected agent cannot pair or open access. It is a speed bump, not a wall: a program already running as your user can edit `~/.agent-bridge/remote/` or fake a terminal.
 - **Pairing protocol.** The invite holds a one-time 256-bit secret that authenticates an X25519 key exchange; both people compare a 6-digit code derived from the result. If someone copied the code and pairs in your place, the other person sees no code or a different one: answer no, and nothing is saved.
-- **Encryption.** One root key per pair, one key and one relay topic per direction, every frame sealed with ChaCha20-Poly1305, padded to a multiple of 256 bytes. Changed, replayed or foreign frames are dropped. The relay sees topic names, sizes and times, never content.
+- **Encryption.** One root key per pair, one key and one relay topic per direction, every frame sealed with ChaCha20-Poly1305, padded to a multiple of 256 bytes. Changed, replayed or foreign frames are dropped. The relay (ntfy.sh, a third party, unless you host your own) sees both machines' IP addresses, topic names, sizes and times, never content.
 - **Who may reach what.** A machine writes first only to the sessions in its allow list; wildcards never match `agy:new` and `agy:new-cli`. A session that wrote to a machine gets its replies for 24 hours, at that exact address. No hop to a third machine, at most 20 messages a minute per machine, and refusals return a fixed notice that reveals nothing about your sessions.
 - **The machine is authenticated.** The gateway writes `from` as `remote:<machine>/<address>`, where `<machine>` is the name you chose, proven by its key. The address after the `/` is declared by the other machine.
 - **Local senders still aren't.** Any local process can write to a machine in the name of a live local session, and so let the other machine reply to it. Pairing protects you from the other machine, not from your own agents.
@@ -283,12 +286,13 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 | `list` shows an agy session with `no relay` | Ask agy to run `bridge.py ensure-relay`, and read `~/.agent-bridge/state/relay-<conversationId>.log` (`auto-relay.log` with `--auto-relay`). |
 | A message to an agy CLI conversation with `no process` gets no answer | Read `~/.agent-bridge/state/cli-<conversationId>.log` (`cli-new.log` for `agy:new-cli`). |
 | `agy:new: no Antigravity Desktop window with a running relay` | Open Desktop, then list the agy sessions (with `--auto-relay`) or run `ensure-relay` in one of its conversations. |
-| A Claude session is not listed | Only sessions started with the channel are listed. |
+| A Claude session is not listed | Only sessions started with the channel are listed. Without the channel, a `Monitor` on `python3 -u ~/.agent-bridge/bridge.py watch claude` reads the shared `claude` inbox. |
+| `not delivered ... kept in the inbox, retry in 10s` (relay log) | agy's language server is busy or unreachable for a moment; the message is retried automatically. |
 | `'agy' matches 2 live agy peers` | Pick one with `agy@<directory>`, `agy:<id-prefix>` or `agy:<name>`. |
 | `'claude:<name>' matches 0 live claude peers` | That session ended, was renamed, or has no channel. Run `bridge.py list`. |
 | `bridge.py remote …` prints the general usage | The installed copy is older: run the installer again. |
 | `needs a person at a terminal` | Run the command yourself in a real terminal (not through an agent, not with `!` in Claude Code). |
-| A remote message comes back `not delivered` | On the other machine, `remote status` shows who may write first; `remote allow <machine> <pattern>` widens it. Its `state/remote-gateway.log` says why. |
+| A remote message comes back `not delivered` | On the other machine, `remote status` shows who may write first; `remote allow <machine> <pattern>` widens it. Its `~/.agent-bridge/state/remote-gateway.log` says why. |
 | Claude's `send` tool refuses `remote:` addresses | The session started before the update: restart `claude`. |
 | Remote messages stop arriving | `bridge.py remote status`: start the gateway if it is stopped, and read `~/.agent-bridge/state/remote-gateway.log`. |
 
@@ -312,9 +316,9 @@ Claude Code and agy share no protocol, so Diaulos uses a file mailbox in `~/.age
 
 <p align="center"><img src="docs/images/architecture.svg" alt="Senders write to the ~/.agent-bridge mailbox; Claude is woken by its MCP channel, agy by its language server or agy -p, and remote messages go through the gateway" width="900"></p>
 
-A message is claimed atomically, so two readers never get the same one, and it leaves the inbox only once handed over: delivery is at least once. Every detail, including what the installer changes on your machine, is in [docs/INTERNALS.md](docs/INTERNALS.md).
+A reader claims a message atomically by moving it to `archive/`, so two readers never get the same one. If the delivery fails, the message goes back to the inbox and is retried; a reader killed in mid-delivery can lose it. Every detail, including the full list of what the installer changes, is in [docs/INTERNALS.md](docs/INTERNALS.md).
 
-**What gets installed:** `~/.agent-bridge/` (the bridge and its data), global agy hooks in `~/.gemini/config/hooks.json`, the `agent-bridge` MCP server for Claude Code (user scope), the `agy-bridge` and `diaulos-remote` skills in `~/.claude/skills/`, allow rules in `~/.claude/settings.json`, and with `--shell` / `-Shell` the `claude` wrapper (`~/.bashrc`, PowerShell profile, cmd `AutoRun`). Each config file is backed up first as `<file>.bak-agent-bridge`, and the uninstaller reverts everything.
+**What gets installed:** `~/.agent-bridge/` (the bridge and its data), global agy hooks in `~/.gemini/config/hooks.json`, the `agent-bridge` MCP server for Claude Code (user scope), the `agy-bridge` and `diaulos-remote` skills in `~/.claude/skills/`, allow rules in `~/.claude/settings.json`, and with `--shell` / `-Shell` the `claude` wrapper (`~/.bashrc`, PowerShell profile, cmd `AutoRun`). Each config file is backed up first as `<file>.bak-agent-bridge`, and the uninstaller reverts these changes (mailboxes and keys stay unless `--purge`).
 
 ## Development
 

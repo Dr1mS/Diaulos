@@ -7,6 +7,12 @@ All notable changes to Diaulos. The format follows [Keep a Changelog](https://ke
 ### Added
 
 - **Other machines.** `remote:<machine>/<address>` reaches a session on a machine paired with this one, on any network, through a relay (ntfy.sh by default, or `remote relay-server`). A person pairs the two machines once, at a terminal, with `remote invite` and `remote join`: a one-time code, an X25519 exchange and a 6-digit code compared on both sides. Messages are end-to-end encrypted with ChaCha20-Poly1305, with one key and one relay topic per direction. Each machine has an allow list, replies reach the session that wrote first, and messages are rate-limited and never hop to a third machine. The gateway starts with agy and Claude Code sessions, on the first send or with `remote start`, and the new `diaulos-remote` skill explains how and gives the security rules. Needs the `cryptography` package; the rest of Diaulos stays standard library only. Tested for real between two machines on different networks through ntfy.sh. Journal §21.
+- **State of the art** (`docs/ETAT-DE-L-ART.md`, French): Diaulos compared with MCP mailboxes, tmux orchestrators, Claude Code agent teams and the A2A, ACP and ANP protocols.
+
+### Changed
+
+- **README rewritten** for users, in both languages: what Diaulos does, an illustrated demo, a comparison with other approaches, then installation, usage, other machines, security and troubleshooting. Implementation details moved to `docs/INTERNALS.md`; `docs/images/` holds the demo GIF (rendered by `make_demo.py`) and two diagrams.
+- `bridge.py remote gateway` takes over from a gateway already running, so a systemd unit can own it.
 
 ### Fixed
 

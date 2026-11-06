@@ -969,10 +969,14 @@ class Gateway:
 
 
 def run_gateway():
+    """Run the gateway in the foreground. One that already runs is stopped first: a service
+    manager (systemd, Task Scheduler) must be able to own the gateway even after a hook or a
+    send started one."""
+    other = gateway_pid()
+    if other and other != os.getpid():
+        log(f"taking over from the gateway pid {other}")
+        stop()
     with bridge._locked(_gateway_file()):
-        other = gateway_pid()
-        if other and other != os.getpid():
-            sys.exit(f"the gateway already runs: pid {other}")
         _beat(os.getpid())
     Gateway().run()
 
