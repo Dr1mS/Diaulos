@@ -22,7 +22,7 @@ agy (~/projects/api)  ⇄  agy (~/projects/web)  ⇄  Antigravity Desktop  ⇄  
 - [How it works](#how-it-works)
 - [What gets installed](#what-gets-installed) · [Troubleshooting](#troubleshooting)
 - [Security](#security) · [Status and limits](#status-and-limits)
-- [Development](#development) · [Changelog](CHANGELOG.md) · [Lab notebook](docs/JOURNAL.md)
+- [Development](#development) · [Changelog](CHANGELOG.md) · [Lab notebook](docs/JOURNAL.md) · [State of the art](docs/ETAT-DE-L-ART.md) (in French)
 
 ## What you can do with it
 
