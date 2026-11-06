@@ -1032,8 +1032,8 @@ class Relay:
         self.subs = collections.Counter()  # client -> open subscriptions
         self.trusted_proxy = self._ip(trusted_proxy) if trusted_proxy else None
         self.pending = {}  # socket -> time it connected, until its request is complete
-        self.connections = collections.Counter()  # raw peer address -> open connections
-        self.peer_of = {}  # socket -> raw peer address, counted in `connections`
+        self.connections = collections.Counter()  # client key -> open connections
+        self.peer_of = {}  # socket -> client key (/64 for IPv6), counted in `connections`
 
     @staticmethod
     def _ip(address):
@@ -1274,12 +1274,16 @@ class Relay:
             address_family = __import__("socket").AF_INET6 if ":" in host else __import__("socket").AF_INET
 
             def verify_request(self, request, client_address):
+                # Same grouping as the token bucket (/64, IPv4-mapped). The trusted proxy carries
+                # every client: only the total applies to it, the per-client limits after headers do the rest.
+                key = relay.client(client_address[0], None)
+                proxied = relay.trusted_proxy is not None and relay._ip(client_address[0]) == relay.trusted_proxy
                 with relay.lock:
                     if sum(relay.connections.values()) >= relay.CONNECTIONS_MAX \
-                            or relay.connections[client_address[0]] >= relay.CONNECTIONS_PER_ADDRESS:
+                            or (not proxied and relay.connections[key] >= relay.CONNECTIONS_PER_ADDRESS):
                         return False
-                    relay.connections[client_address[0]] += 1
-                    relay.peer_of[request] = client_address[0]
+                    relay.connections[key] += 1
+                    relay.peer_of[request] = key
                     relay.pending[request] = time.time()
                 return True
 
