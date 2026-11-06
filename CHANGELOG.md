@@ -4,6 +4,10 @@ All notable changes to Diaulos. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Other machines.** `remote:<machine>/<address>` reaches a session on a machine paired with this one, on any network, through a relay (ntfy.sh by default, or `remote relay-server`). A person pairs the two machines once, at a terminal, with `remote invite` and `remote join`: a one-time code, an X25519 exchange and a 6-digit code compared on both sides. Messages are end-to-end encrypted with ChaCha20-Poly1305, with one key and one relay topic per direction. Each machine has an allow list, replies reach the session that wrote first, and messages are rate-limited and never hop to a third machine. The gateway starts with agy and Claude Code sessions, on the first send or with `remote start`, and the new `diaulos-remote` skill explains how and gives the security rules. Needs the `cryptography` package; the rest of Diaulos stays standard library only.
+
 ### Fixed
 
 - Windows: two readers could get the same message. A reader now takes a message only after creating a marker with `O_EXCL`; found by the new Windows CI job.

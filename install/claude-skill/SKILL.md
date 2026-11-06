@@ -41,6 +41,10 @@ An `ext:<name>` address is a program connected to the bridge (a bot, a CI job, a
 - **Address resolution & safety**: `claude:<name>` must match a live Claude session (or an alias it held before `/rename`). Unknown names are refused with the list of live peers, preventing lost messages. An agent cannot message itself. Plain `claude` reads the shared inbox. Addresses are strictly validated (no `/`, `\`, or `..`).
 - **Delivery**: a message leaves the inbox only once it is handed over: accepted by agy's language server (HTTP 200), or written to the receiving Claude session's channel. On failure it stays in the inbox and the relay retries every 10 s. Delivery is at least once: a rare duplicate is possible, a loss is not. Messages arriving while a batch waits are delivered together in that batch.
 
+## Other machines
+
+An address `remote:<machine>/<address>` is a session on another machine that the user paired with this one. See the `diaulos-remote` skill before using one: its security rules apply.
+
 ## How agy receives a message
 
 - **agy is working**: its PreInvocation hook injects the message before the next model call.

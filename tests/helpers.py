@@ -194,8 +194,8 @@ def _restore_env(key, value):
 
 
 def _kill_processes_of(bridge_home):
-    """Kills the relays, cli-run and cli-new workers of this test's bridge home, found by
-    the pids its peer files and relay logs record. Never looks at other programs."""
+    """Kills the relays, cli-run and cli-new workers and the remote gateway of this test's bridge
+    home, found by the pids its peer files, relay logs and gateway file record. Never looks at other programs."""
     pids = set()
     peers = os.path.join(bridge_home, "peers")
     for name in os.listdir(peers) if os.path.isdir(peers) else []:
@@ -209,6 +209,13 @@ def _kill_processes_of(bridge_home):
     for name in os.listdir(state) if os.path.isdir(state) else []:
         if name.startswith("relay-") and name.endswith(".log"):
             pids.update(int(p) for p in re.findall(r"relay up pid=(\d+)", _read(os.path.join(state, name))))
+    try:
+        with open(os.path.join(bridge_home, "remote", "gateway.json"), encoding="utf-8") as f:
+            gateway = json.load(f).get("pid")
+        if isinstance(gateway, int):
+            pids.add(gateway)
+    except (OSError, ValueError):
+        pass
     for pid in pids - {os.getpid()}:
         try:
             os.kill(pid, signal.SIGTERM)

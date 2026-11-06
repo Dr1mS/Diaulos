@@ -2,7 +2,7 @@
 # Windows counterpart of install.sh; same targets:
 #   ~/.agent-bridge/bridge.py            the bridge (mailbox data lives next to it)
 #   ~/.gemini/config/hooks.json          global agy hooks, under the key "agent-bridge"
-#   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill
+#   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill (and diaulos-remote, for other machines)
 #   ~/.claude/settings.json              allow rule for bridge commands
 # Re-run it to update. Each config file it edits is backed up first as <file>.bak-agent-bridge.
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Shell]
@@ -27,7 +27,13 @@ Write-Host "python      -> $Python"
 New-Item -ItemType Directory -Force $BridgeHome | Out-Null
 Copy-Item (Join-Path $Repo 'bridge\bridge.py') $BridgeHome -Force
 Copy-Item (Join-Path $Repo 'bridge\mcp_channel.py') $BridgeHome -Force
-Write-Host "bridge      -> $BridgeHome\{bridge,mcp_channel}.py"
+Copy-Item (Join-Path $Repo 'bridge\remote.py') $BridgeHome -Force
+Write-Host "bridge      -> $BridgeHome\{bridge,mcp_channel,remote}.py"
+$ErrorActionPreference = 'Continue'
+& $Python -c 'import cryptography' 2>$null | Out-Null
+$hasCrypto = $LASTEXITCODE -eq 0
+$ErrorActionPreference = 'Stop'
+if (-not $hasCrypto) { Write-Host 'remote      -> optional: python -m pip install cryptography, to message other machines' }
 
 # MCP channel server for every Claude Code session. It only reads its inbox in
 # sessions started with: claude --dangerously-load-development-channels server:agent-bridge
@@ -46,7 +52,10 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
 $SkillDir = Join-Path $HOME '.claude\skills\agy-bridge'
 New-Item -ItemType Directory -Force $SkillDir | Out-Null
 Copy-Item (Join-Path $Repo 'install\claude-skill\SKILL.md') $SkillDir -Force
-Write-Host 'claude skill -> ~/.claude/skills/agy-bridge/SKILL.md'
+$RemoteSkillDir = Join-Path $HOME '.claude\skills\diaulos-remote'
+New-Item -ItemType Directory -Force $RemoteSkillDir | Out-Null
+Copy-Item (Join-Path $Repo 'install\claude-skill-remote\SKILL.md') $RemoteSkillDir -Force
+Write-Host 'claude skill -> ~/.claude/skills/{agy-bridge,diaulos-remote}/SKILL.md'
 
 # Kept ASCII-only: Windows PowerShell pipes text to native programs in ASCII.
 $Configure = @'

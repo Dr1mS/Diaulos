@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Remove what install.sh added. Mailbox data in ~/.agent-bridge is kept unless --purge is given.
+# Remove what install.sh added. Mailbox data and remote pairings (keys) in ~/.agent-bridge
+# are kept unless --purge is given.
 set -euo pipefail
 
 BRIDGE_HOME="${AGENT_BRIDGE_HOME:-$HOME/.agent-bridge}"
@@ -85,8 +86,9 @@ EOF
   echo "removed claude wrapper from ~/.bashrc"
 fi
 rm -f "$BRIDGE_HOME/claude-channel.sh"
-rm -rf "$HOME/.claude/skills/agy-bridge" && echo "removed claude skill"
-rm -f "$BRIDGE_HOME/bridge.py" "$BRIDGE_HOME/mcp_channel.py" "$BRIDGE_HOME/state/agy.auto-relay"
+[ -f "$BRIDGE_HOME/bridge.py" ] && python3 "$BRIDGE_HOME/bridge.py" remote stop >/dev/null 2>&1 || true
+rm -rf "$HOME/.claude/skills/agy-bridge" "$HOME/.claude/skills/diaulos-remote" && echo "removed claude skills"
+rm -f "$BRIDGE_HOME/bridge.py" "$BRIDGE_HOME/mcp_channel.py" "$BRIDGE_HOME/remote.py" "$BRIDGE_HOME/state/agy.auto-relay"
 if [ "${1:-}" = "--purge" ]; then
   rm -rf "$BRIDGE_HOME" && echo "purged $BRIDGE_HOME"
 fi

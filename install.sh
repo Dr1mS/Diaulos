@@ -2,7 +2,7 @@
 # Install the Claude Code <-> agy agent bridge for the current user.
 #   ~/.agent-bridge/bridge.py            the bridge (mailbox data lives next to it)
 #   ~/.gemini/config/hooks.json          global agy hooks, under the key "agent-bridge"
-#   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill
+#   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill (and diaulos-remote, for other machines)
 #   ~/.claude/settings.json              allow rule for bridge commands
 # Re-run it to update. Each config file it edits is backed up first as <file>.bak-agent-bridge.
 # Options:
@@ -27,7 +27,11 @@ BRIDGE_HOME="${AGENT_BRIDGE_HOME:-$HOME/.agent-bridge}"
 mkdir -p "$BRIDGE_HOME"
 install -m 755 "$REPO/bridge/bridge.py" "$BRIDGE_HOME/bridge.py"
 install -m 755 "$REPO/bridge/mcp_channel.py" "$BRIDGE_HOME/mcp_channel.py"
-echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel}.py"
+install -m 755 "$REPO/bridge/remote.py" "$BRIDGE_HOME/remote.py"
+echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel,remote}.py"
+if ! python3 -c "import cryptography" 2>/dev/null; then
+  echo "remote      -> optional: python3 -m pip install cryptography, to message other machines"
+fi
 
 # Experimental: the hooks read the language server's token from its command line
 # and start the relay themselves, so agy never has to run ensure-relay.
@@ -51,7 +55,9 @@ fi
 
 mkdir -p "$HOME/.claude/skills/agy-bridge"
 install -m 644 "$REPO/install/claude-skill/SKILL.md" "$HOME/.claude/skills/agy-bridge/SKILL.md"
-echo "claude skill -> ~/.claude/skills/agy-bridge/SKILL.md"
+mkdir -p "$HOME/.claude/skills/diaulos-remote"
+install -m 644 "$REPO/install/claude-skill-remote/SKILL.md" "$HOME/.claude/skills/diaulos-remote/SKILL.md"
+echo "claude skill -> ~/.claude/skills/{agy-bridge,diaulos-remote}/SKILL.md"
 
 python3 - "$REPO/install/agy-hooks.json" "$BRIDGE_HOME/bridge.py" <<'EOF'
 import json, os, shutil, sys
