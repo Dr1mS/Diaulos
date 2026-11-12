@@ -39,6 +39,9 @@ import time
 
 LIMITS = {"max_turns": 20, "max_price": 0.50, "attempts": 3, "retry_seconds": None}
 TURN_LIMIT_TEXT = "Turn limit of"
+PRICE_LIMIT_TEXT = "Price limit exceeded"  # vibe's PriceLimitMiddleware (core/middleware.py:73)
+CUT_NOTE = ("Note: the previous bridge turn here stopped at a limit; do not finish its work unless this "
+            "message asks for it.")
 WORD_JOINER = "⁠"
 
 
@@ -79,8 +82,12 @@ def limits():
 
 def incoming_text(msgs, me):
     """The bridge's message blocks for vibe: every `@` gets a word joiner, so vibe does not
-    inline a file (path_prompt.py rejects U+2060), and the last line names bridge_send."""
+    inline a file (path_prompt.py rejects U+2060), and the last line names bridge_send.
+    After a turn cut by a limit (state/vibe-cut/<suffix>), the text starts with CUT_NOTE,
+    once: the file is deleted here (§4.4, P4)."""
     text = _core()._incoming_text(msgs, me)
+    if take_cut(me.split(":", 1)[-1]):
+        text = CUT_NOTE + "\n" + text
     end = text.rfind("\nReply with: ")
     if end >= 0:
         text = text[:end]
@@ -106,6 +113,51 @@ def _no_reader(address):
         return address not in {p["address"] for p in _core().peers("ext")}
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------- turns cut by a limit (§4.4, P3, P4)
+
+def _cut_path(suffix):
+    return _core()._path("state", "vibe-cut", suffix)
+
+
+def write_cut(suffix, reason):
+    path = _cut_path(suffix)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"{_now()} {reason}\n")
+
+
+def take_cut(suffix):
+    """True, once, after a turn of this conversation stopped at a limit."""
+    try:
+        os.remove(_cut_path(suffix))
+    except OSError:
+        return False
+    return True
+
+
+def stop_reason(reply, suffix, lim):
+    """"price cap", "turn limit" or None for the turn that gave `reply`: vibe's stop text, or
+    a session cost at or above the cap (vibe counts the cost of this vibe-acp process)."""
+    if PRICE_LIMIT_TEXT in reply:
+        return "price cap"
+    cost = _cost_value(suffix)
+    if cost is not None and cost >= lim["max_price"]:
+        return "price cap"
+    if TURN_LIMIT_TEXT in reply:
+        return "turn limit"
+    return None
+
+
+def tell_cut(msgs, me, reason, lim):
+    """Write the cut file and tell each sender, with a [bridge, not an agent] note."""
+    write_cut(me.split(":", 1)[-1], reason)
+    limit = f"price cap ${lim['max_price']}" if reason == "price cap" else f"turn limit of {lim['max_turns']}"
+    for sender in sorted({m["from"] for m in msgs}):
+        ids = ", ".join(m["id"] for m in msgs if m["from"] == sender)
+        _tell(sender, f"Your message {ids} to {me} was delivered, but its vibe turn stopped at the {limit} "
+              "before the end: the answer may be missing or partial.", me)
 
 
 # ---------------------------------------------------------------- in-flight records
@@ -288,16 +340,21 @@ def _tell(to, text, sender):
         _core().send(to, "[bridge, not an agent] " + text, sender)
 
 
-def _cost(suffix):
+def _cost_value(suffix):
     """stats.session_cost of the conversation's current session, from its meta.json: for a
-    loaded session, vibe counts the current process only (probe vibe-acp A4)."""
+    loaded session, vibe counts the current process only (probe vibe-acp A4). None if unknown."""
     with contextlib.suppress(Exception):
         conv = _core()._vibe().conversation(suffix)
         with open(os.path.join(conv["session_dir"], "meta.json"), encoding="utf-8") as f:
             cost = (json.load(f).get("stats") or {}).get("session_cost")
-        if isinstance(cost, (int, float)):
-            return f"${cost:.4f}"
-    return "unknown"
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            return cost
+    return None
+
+
+def _cost(suffix):
+    cost = _cost_value(suffix)
+    return "unknown" if cost is None else f"${cost:.4f}"
 
 
 # ---------------------------------------------------------------- vibe-run
@@ -359,9 +416,16 @@ def vibe_run(suffix):
                 acp, session = None, None
             if error is None:
                 clear_inflight(suffix)
-                limit = " (turn limit reached)" if TURN_LIMIT_TEXT in reply else ""
-                print(f"{_now()} delivered {ids} to {me} in session {session} with vibe-acp{limit}; "
-                      f"session_cost {_cost(suffix)}", flush=True)
+                reason = stop_reason(reply, suffix, lim)
+                if reason == "price cap":
+                    print(f"{_now()} stopped at price cap ${lim['max_price']}: {ids} to {me} in session {session}; "
+                          f"session_cost {_cost(suffix)}", flush=True)
+                else:
+                    limit = " (turn limit reached)" if reason else ""
+                    print(f"{_now()} delivered {ids} to {me} in session {session} with vibe-acp{limit}; "
+                          f"session_cost {_cost(suffix)}", flush=True)
+                if reason:
+                    tell_cut([m for _, m in claimed], me, reason, lim)
                 failures.clear()
                 continue
             for i in ids:
@@ -443,9 +507,13 @@ def vibe_new():
                 started = f" The conversation {address} was created, but its first turn failed." if address else ""
                 _tell(msg["from"], f"Your message {msg['id']} to {new} failed: {error}.{started}", address or new)
                 continue
-            limit = " (turn limit reached)" if TURN_LIMIT_TEXT in reply else ""
+            reason = stop_reason(reply, suffix, lim)
+            limit = {"price cap": f" (stopped at price cap ${lim['max_price']})",
+                     "turn limit": " (turn limit reached)"}.get(reason, "")
             print(f"{_now()} started {address} (session {session}) for {msg['id']} from {msg['from']}{limit}; "
                   f"session_cost {_cost(suffix)}", flush=True)
+            if reason:
+                tell_cut([msg], address, reason, lim)
             named = f", also reachable as vibe:{name}" if name else ""
             _tell(msg["from"], f"Your message {msg['id']} to {new} started the vibe conversation {address}{named}, "
                   f"in {cwd}. It has already run its first turn; its replies come from that address. "

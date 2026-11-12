@@ -291,6 +291,31 @@ CHANNEL_FLAG = re.compile(r"(^|[\s\"])--(channels|dangerously-load-development-c
 CHANNEL_ENTRY = re.compile(rf"(^|[\s,=\"])server:{re.escape(SERVER_NAME)}($|[\s,\"])")
 
 
+VIBE_CHECK_SECONDS = 30
+
+
+def vibe_check(last, now=None):
+    """Every VIBE_CHECK_SECONDS, read the vibe peers: that puts back the messages of a vibe
+    killed mid-turn and starts vibe-run for them (docs/VIBE-DESIGN.md §4.4, P1), even when
+    nobody types a Diaulos command. Then every vibe inbox with waiting messages gets
+    _wake_vibe: a conversation whose TUI closed (also one that was `wake: none`) is served by
+    vibe-run (§4.2). _wake_vibe takes the conversation's lock and starts nothing while a TUI
+    or a vibe-run serves it. Returns the time of the last check."""
+    now = time.time() if now is None else now
+    if now - last < VIBE_CHECK_SECONDS:
+        return last
+    try:
+        bridge.peers("vibe")
+        for name in sorted(os.listdir(bridge._path("inbox"))):
+            if name.startswith("vibe-") and name != "vibe-new" and bridge._pending("vibe:" + name[5:]):
+                bridge._wake_vibe("vibe:" + name[5:])
+    except FileNotFoundError:
+        pass  # no inbox folder yet
+    except (Exception, SystemExit) as e:
+        log("vibe check error:", repr(e))
+    return now
+
+
 def watch_inbox():
     _ready.wait()
     if not channel_enabled():
@@ -300,8 +325,9 @@ def watch_inbox():
     _adopt_stale(current_address())
     bridge.ensure_gateway()  # paired machines: keep receiving from them after a reboot
     log(f"watching {ADDRESS} in {bridge.HOME}")
-    last_beat, watched = 0, ADDRESS
+    last_beat, watched, last_vibe = 0, ADDRESS, 0
     while True:
+        last_vibe = vibe_check(last_vibe)
         try:
             me = current_address()
             if me != watched:  # renamed: register the new name right away

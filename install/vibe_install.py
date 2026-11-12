@@ -100,7 +100,7 @@ def uninstall(bridge_home, vibe_home):
         os.remove(target)
         print("removed vibe tools %s" % target)
     pycache = os.path.join(tools, "__pycache__")
-    for pyc in glob.glob(os.path.join(pycache, "agent_bridge*.pyc")):
+    for pyc in glob.glob(os.path.join(glob.escape(pycache), "agent_bridge*.pyc")):
         os.remove(pyc)
     backup = os.path.join(tools, BACKUP)
     if os.path.exists(backup) and not os.path.exists(target):

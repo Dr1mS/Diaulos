@@ -194,6 +194,60 @@ class VibeRunTest(RunnerSetup):
         self.assertIn("(turn limit reached)", self.log_of())
         self.assertEqual(self.inbox(ADDRESS), [])
 
+    def cut_file(self, suffix=RENAMED):
+        return os.path.join(self.bridge_home, "state", "vibe-cut", suffix)
+
+    def notes(self):
+        return [m["body"] for m in self.inbox("claude") if m["body"].startswith("[bridge, not an agent]")]
+
+    def test_turn_limit_tells_the_sender_and_marks_the_cut(self):
+        # VIBE-DESIGN §4.4, P3 and P4 (turn limit).
+        self.mode("turn-limit")
+        self.send(ADDRESS, "hello")
+        self.assertTrue(self.runner_done(), self.log_of())
+        notes = self.notes()
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("stopped at the turn limit of 20 before the end", notes[0])
+        self.assertTrue(os.path.exists(self.cut_file()))
+
+    def test_price_limit_text_is_logged_and_told(self):
+        # VIBE-DESIGN §4.4, P3: vibe's own stop text.
+        self.mode("price-limit")
+        self.send(ADDRESS, "hello")
+        self.assertTrue(self.runner_done(), self.log_of())
+        self.assertIn("stopped at price cap $0.5", self.log_of())
+        self.assertNotIn(" delivered ", self.log_of())
+        notes = self.notes()
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn(f"to {ADDRESS} was delivered, but its vibe turn stopped at the price cap $0.5", notes[0])
+        self.assertTrue(os.path.exists(self.cut_file()))
+
+    def test_a_cost_at_the_cap_counts_as_stopped(self):
+        # VIBE-DESIGN §4.4, P3: a session cost at or above the cap, without the stop text.
+        self.env["FAKE_VIBE_COST"] = "0.5"
+        self.send(ADDRESS, "hello")
+        self.assertTrue(self.runner_done(), self.log_of())
+        self.assertIn("stopped at price cap $0.5", self.log_of())
+        self.assertTrue(any("price cap $0.5" in n for n in self.notes()))
+
+    def test_the_next_text_after_a_cut_starts_with_the_note_once(self):
+        # VIBE-DESIGN §4.4, P4.
+        self.mode("price-limit")
+        self.send(ADDRESS, "first, cut")
+        self.assertTrue(self.runner_done(), self.log_of())
+        self.mode("")
+        for body in ("second, from another sender", "third"):
+            self.send(ADDRESS, body, "ext:other")
+            self.assertTrue(self.runner_done(), self.log_of())
+        texts = [e["params"]["prompt"][0]["text"] for e in self.recv("session/prompt")]
+        self.assertEqual(len(texts), 3)
+        note = ("Note: the previous bridge turn here stopped at a limit; do not finish its work unless this "
+                "message asks for it.\n")
+        self.assertFalse(texts[0].startswith(note))
+        self.assertTrue(texts[1].startswith(note), texts[1][:200])
+        self.assertFalse(texts[2].startswith(note), "the note came twice")
+        self.assertFalse(os.path.exists(self.cut_file()))
+
     def test_limits_file_and_environment_of_vibe_acp(self):
         self.send(ADDRESS, "defaults")
         self.assertTrue(self.runner_done(), self.log_of())
@@ -330,6 +384,58 @@ class NeverLostTest(RunnerSetup):
         self.assertIn("lost in a killed vibe", text[0]["params"]["prompt"][0]["text"])
         self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "state", "vibe-inflight",
                                                      RENAMED + ".json")))
+
+    def test_an_open_claude_session_brings_back_a_killed_tui_message(self):
+        # VIBE-DESIGN §4.4, P1: no Diaulos command typed, only the MCP channel of a Claude session.
+        self.leave_record(RENAMED, ADDRESS, "lost in a killed vibe, nobody types")
+        env = dict(self.env, AGENT_BRIDGE_FORCE_CHANNEL="1", AGENT_BRIDGE_ADDRESS="claude:open")
+        channel = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(BRIDGE), "mcp_channel.py")],
+                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   env=env, text=True)
+        self.addCleanup(channel.wait, 10)
+        self.addCleanup(channel.stdin.close)
+        channel.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n")
+        channel.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        channel.stdin.flush()
+        sent = time.time()
+        text = wait_for(lambda: self.recv("session/prompt"), 60)
+        self.assertTrue(text, self.log_of())
+        print(f"\n  killed TUI message delivered by vibe-run {time.time() - sent:.1f}s after the channel started",
+              file=sys.stderr)
+        self.assertIn("nobody types", text[0]["params"]["prompt"][0]["text"])
+
+    def test_the_channel_wakes_a_conversation_whose_wake_none_tui_closed(self):
+        # VIBE-DESIGN §4.2 promise (T6-docs/06-architect.md): a message left waiting by a TUI with
+        # wake none is served by vibe-run once that TUI is gone, without any Diaulos command.
+        tui = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(tui.kill)
+        self.write_peer(RENAMED, tui_pid=tui.pid, tui_seen=time.time(), wake="none")
+        self.send(ADDRESS, "waiting behind a wake-none TUI")
+        self.assertEqual(self.recv("session/prompt"), [], "vibe-run ran while the TUI was alive")
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import mcp_channel as m; m.vibe_check(0); "
+                "m.vibe_check(0)")  # twice: the second call must not start a second vibe-run
+        run = lambda: subprocess.run([sys.executable, "-c", code, os.path.dirname(BRIDGE)], capture_output=True,
+                                     text=True, env=self.env, timeout=60)
+        run()
+        time.sleep(2)
+        self.assertEqual(self.recv("session/prompt"), [], "vibe-run ran while the TUI was alive")
+        tui.kill()
+        tui.wait()
+        out = run()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(self.runner_done(), self.log_of())
+        prompts = wait_for(lambda: self.recv("session/prompt"), 15)
+        self.assertEqual(len(prompts), 1, self.log_of())
+        self.assertIn("waiting behind a wake-none TUI", prompts[0]["params"]["prompt"][0]["text"])
+        self.assertEqual(self.log_of().count("vibe-run vibe:"), 1, "two vibe-run started")
+
+    def test_the_channel_reads_vibe_peers_every_30_seconds(self):
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import mcp_channel as m; calls = []; "
+                "m.bridge.peers = lambda kind=None: calls.append(kind); "
+                "print([m.vibe_check(0, 100), m.vibe_check(100, 129), m.vibe_check(100, 130), calls])")
+        out = subprocess.run([sys.executable, "-c", code, os.path.dirname(BRIDGE)], capture_output=True,
+                             text=True, env=self.env, timeout=30)
+        self.assertEqual(out.stdout.strip(), "[100, 100, 130, ['vibe', 'vibe']]", out.stderr)
 
     def test_a_live_record_is_not_taken_back(self):
         path = self.leave_record(RENAMED, ADDRESS, "being delivered")

@@ -26,9 +26,9 @@ jobs:
       - name: Install cryptography (remote messaging tests)
         run: python -m pip install cryptography
       - name: Check the shell scripts
-        run: bash -n install.sh && bash -n uninstall.sh
-      - name: Tests
-        run: python -m unittest discover -s tests -v
+        run: bash -n install.sh && bash -n uninstall.sh && bash -n tests/run-proofs.sh
+      - name: Tests (tests/run-proofs.sh; its real checks need vibe and DIAULOS_REAL_VIBE=1)
+        run: PYTHON=python tests/run-proofs.sh
 
   windows:
     name: Windows, Python 3.12

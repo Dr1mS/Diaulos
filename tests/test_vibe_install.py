@@ -130,6 +130,17 @@ class VibeInstallTest(unittest.TestCase):
         self.assertIn("restored your", out)
         self.assert_same(before, vibe_home)
 
+    def test_a_vibe_home_with_glob_characters(self):
+        # The .pyc is found with glob: `[` in VIBE_HOME must be taken literally (glob.escape).
+        vibe_home = os.path.join(self.tmp, "vi[b]e home")
+        os.makedirs(os.path.join(vibe_home, "tools", "__pycache__"))
+        before = self.snapshot(vibe_home)
+        env = {"VIBE_HOME": vibe_home}
+        self.run_script("install.sh", env=env)
+        self.run_vibe_once(vibe_home)
+        self.run_script("uninstall.sh", env=env)
+        self.assert_same(before, vibe_home)
+
     def test_vibe_on_path_without_vibe_home(self):
         fake_vibe = os.path.join(self.bin, "vibe")
         with open(fake_vibe, "w") as f:

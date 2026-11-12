@@ -33,6 +33,8 @@ Environment:
                      error-prompt    answer session/prompt with an internal error
                      turn-limit      end the prompt as vibe's TurnLimitMiddleware
                                      would, without a reply to the sender
+                     price-limit     end the prompt as vibe's PriceLimitMiddleware
+                                     would, without a reply to the sender
                      slow=<seconds>  wait that long inside each prompt
   FAKE_VIBE_COST   cost added per prompt, in USD (default 0.01).
   BRIDGE           path of bridge.py, for the reply.
@@ -281,6 +283,8 @@ def handle_prompt(rid, params, pending):
     session.cost += COST
     if "turn-limit" in MODES:
         out = "Turn limit of %s reached" % (session.max_turns or 0)
+    elif "price-limit" in MODES:
+        out = "<vibe_stop_event>Price limit exceeded: $%.4f > $0.00</vibe_stop_event>" % session.cost
     else:
         to = answer_sender(session, text)
         out = "pong sent to %s" % to if to else "ok"

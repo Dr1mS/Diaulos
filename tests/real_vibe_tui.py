@@ -313,7 +313,8 @@ class Run:
         self.results["after_turn_gap_seconds"] = [round(g, 2) for g in gaps]
         print(f"2. during `sleep 20`: delivered {self.results['after_turn_gap_seconds']} s after the last save "
               f"of the running turn", flush=True)
-        assert max(gaps) < 1.0
+        # About 1 s: the plugin polls every second (VIBE-DESIGN §4.4, P5: measured 1.06 to 1.21 s).
+        assert max(gaps) < 1.5, f"{max(gaps):.2f} s after the end of the turn; target about 1 s"
 
     def inbox_count(self):
         inbox = os.path.join(self.bridge_home, "inbox", f"vibe-{self.suffix}")

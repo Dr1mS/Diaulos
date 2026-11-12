@@ -119,6 +119,19 @@ class TuiTest(TuiSetup):
         self.assertIsNone(self.record(), "the record of a saved turn stays")
         self.assertEqual([m["role"] for m in self.saved_lines()], ["user", "assistant"])
 
+    def test_a_cut_turn_gives_the_note_once(self):
+        # VIBE-DESIGN §4.4, P4: the plugin's text after a turn vibe-run stopped at a limit.
+        self.plugin.runner().write_cut(self.app.suffix, "price cap")
+        for i in range(2):
+            self.put(f"after the cut {i}")
+            self.assertEqual(self.tui.tick(), "delivered")
+            self.assertTrue(self.turn_over())
+            self.tui.tick()
+        first, second = self.app.calls[0][0], self.app.calls[1][0]
+        self.assertTrue(first.startswith("Note: the previous bridge turn here stopped at a limit; do not finish "
+                                         "its work unless this message asks for it.\n"), first[:200])
+        self.assertNotIn("previous bridge turn", second)
+
     def test_a_burst_goes_in_one_turn(self):
         for i in range(3):
             self.put(f"part {i}")
