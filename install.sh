@@ -37,7 +37,8 @@ echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel,remote,vibe_sessions,vibe_
 # Mistral Vibe: one file in $VIBE_HOME/tools, no vibe config edited.
 VIBE_ON_PATH=0
 command -v vibe >/dev/null && VIBE_ON_PATH=1
-python3 "$REPO/install/vibe_install.py" install "$REPO" "$BRIDGE_HOME" "${VIBE_HOME:-$HOME/.vibe}" "$VIBE_ON_PATH"
+VIBE_DIR="${VIBE_HOME:-$HOME/.vibe}"
+python3 "$REPO/install/vibe_install.py" install "$REPO" "$BRIDGE_HOME" "$VIBE_DIR" "$VIBE_ON_PATH"  # set -e stops on a failure
 if ! python3 -c "import cryptography" 2>/dev/null; then
   echo "remote      -> optional: python3 -m pip install cryptography, to message other machines"
 fi
@@ -137,7 +138,11 @@ fi
 
 echo
 echo "Done. Restart agy sessions so they load the new hooks."
-echo "Restart open vibe TUIs so they load the bridge tools. If you install vibe later, run this installer again."
+if [ -f "$VIBE_DIR/tools/agent_bridge.py" ]; then
+  echo "Restart open vibe TUIs so they load the bridge tools."
+else
+  echo "If you install vibe later, run this installer again."
+fi
 if [ "$SHELL_WRAPPER" = 1 ]; then
   echo "In a new terminal, plain \`claude\` now starts with the agent-bridge channel."
 else

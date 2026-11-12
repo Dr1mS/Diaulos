@@ -23,8 +23,8 @@ import unittest
 from helpers import ROOT, WINDOWS
 
 VIBE_PYTHON = os.path.expanduser("~/.local/share/uv/tools/mistral-vibe/bin/python")
-RESTART_VIBE = ("Restart open vibe TUIs so they load the bridge tools. "
-                "If you install vibe later, run this installer again.")
+RESTART_VIBE = "Restart open vibe TUIs so they load the bridge tools."
+RERUN = "If you install vibe later, run this installer again."
 LOAD = ("import sys; from pathlib import Path; from vibe.core.tools.manager import ToolManager; "
         "t = ToolManager._load_tools_from_file(Path(sys.argv[1])); print(sorted(x.get_name() for x in t))")
 OTHER = "# someone else's vibe tool\nprint('mine')\n"
@@ -96,6 +96,7 @@ class VibeInstallTest(unittest.TestCase):
         out = self.run_script("install.sh")
         self.assertIn("vibe        -> " + os.path.join(vibe_home, "tools", "agent_bridge.py"), out)
         self.assertIn(RESTART_VIBE, out)
+        self.assertNotIn(RERUN, out)
         self.assertIn(f"BRIDGE_DIR = {self.bridge_home!r}", self.shim_text(vibe_home))
         for name in ("vibe_sessions.py", "vibe_runner.py", "vibe_plugin.py"):
             self.assertTrue(os.path.exists(os.path.join(self.bridge_home, name)), name)
@@ -157,10 +158,25 @@ class VibeInstallTest(unittest.TestCase):
         self.run_script("uninstall.sh")
         self.assert_same(before, vibe_home)
 
+    def test_a_failed_vibe_step_stops_the_installer(self):
+        fake_vibe = os.path.join(self.bin, "vibe")
+        with open(fake_vibe, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(fake_vibe, 0o755)
+        vibe_home = os.path.join(self.tmp, "vibe-is-a-file")
+        with open(vibe_home, "w") as f:
+            f.write("x\n")  # vibe on PATH, VIBE_HOME a file: the vibe step cannot create tools/
+        proc = subprocess.run(["/bin/bash", os.path.join(ROOT, "install.sh")], capture_output=True, text=True,
+                              env=dict(self.env, VIBE_HOME=vibe_home), timeout=60)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertNotIn("Done.", proc.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".claude")), "steps after vibe ran")
+
     def test_no_vibe_nothing_written(self):
         out = self.run_script("install.sh")
         self.assertIn("vibe        -> not found", out)
-        self.assertIn(RESTART_VIBE, out)  # vibe installed later: the installer must run again
+        self.assertIn(RERUN, out)  # vibe installed later: the installer must run again
+        self.assertNotIn(RESTART_VIBE, out)
         self.assertFalse(os.path.exists(os.path.join(self.home, ".vibe")))
         self.run_script("uninstall.sh")
         self.assertFalse(os.path.exists(os.path.join(self.home, ".vibe")))

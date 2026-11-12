@@ -160,7 +160,11 @@ if ($Shell) {
 
 Write-Host ''
 Write-Host 'Done. Restart agy sessions so they load the new hooks.'
-Write-Host 'Restart open vibe TUIs so they load the bridge tools. If you install vibe later, run this installer again.'
+if (Test-Path (Join-Path $VibeHome 'tools\agent_bridge.py')) {
+    Write-Host 'Restart open vibe TUIs so they load the bridge tools.'
+} else {
+    Write-Host 'If you install vibe later, run this installer again.'
+}
 if ($Shell) {
     Write-Host 'In a new terminal (PowerShell or cmd), plain `claude` now starts with the agent-bridge channel.'
 } else {

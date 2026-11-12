@@ -629,6 +629,7 @@ def start():
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("['bridge_list_agents', 'bridge_send']", proc.stdout)
         self.assertIn("error: Diaulos is not available", proc.stdout)
+        self.assertIn("; see " + os.path.join(self.bridge_home, "state", "vibe-plugin.log"), proc.stdout)
         self.assertIn("plugin not started", self.state("vibe-plugin.log"))
 
 

@@ -74,7 +74,8 @@ def _call(name: str, *args, **kwargs) -> str:
         return f"error: {e}"
     except Exception as e:
         _log(f"{name} failed: {e!r}")
-        return f"error: Diaulos is not available ({e!r})"
+        log = os.path.join(BRIDGE_DIR, "state", "vibe-plugin.log")
+        return f"error: Diaulos is not available ({e!r}); see {log}"
 
 
 class BridgeResult(BaseModel):
