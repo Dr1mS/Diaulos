@@ -1,0 +1,2 @@
+{"t": 1794490167.752, "pid": 287051, "event": "import", "module": "vibe_tools_discovered_bridge_probe_tool_9a5256c3"}
+{"t": 1794490170.308, "pid": 287051, "event": "run", "text": "S9P", "session_id": "c7a20d11-7bcf-f7ae-c2da-6ce49b6f1fd9", "session_dir": "/home/<compte>/Bureau/Diaulos/prototypes/vibe-s9/out/p-mode/vibe_home/logs/session/session_20261112_132927_c7a20d11", "has_ctx": true, "permission": "always"}

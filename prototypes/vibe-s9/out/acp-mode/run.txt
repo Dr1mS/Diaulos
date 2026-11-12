@@ -1,0 +1,34 @@
+{
+ "mode": "new",
+ "permission_requests": [],
+ "updates": {
+  "available_commands_update": 1,
+  "user_message_chunk": 1,
+  "session_info_update": 1,
+  "agent_thought_chunk": 37,
+  "tool_call": 2,
+  "tool_call_update": 1,
+  "usage_update": 2,
+  "agent_message_chunk": 9
+ },
+ "agent": {
+  "name": "@mistralai/mistral-vibe",
+  "title": "Mistral Vibe",
+  "version": "2.20.0"
+ },
+ "load_session_capability": true,
+ "session_response": {
+  "sessionId": "b73a5854-5e4b-3d9c-7839-eb77fb8ffa78"
+ },
+ "set_max_turns": "ok",
+ "set_max_tokens": "ok",
+ "prompt_result": {
+  "stopReason": "end_turn",
+  "usage": {
+   "totalTokens": 12554,
+   "inputTokens": 12398,
+   "outputTokens": 156
+  }
+ },
+ "exit": 0
+}
