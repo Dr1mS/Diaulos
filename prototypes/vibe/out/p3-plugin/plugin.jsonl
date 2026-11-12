@@ -1,0 +1,19 @@
+{"t": 1794489080.568, "pid": 223790, "kind": "import", "argv": ["/home/<compte>/.local/bin/vibe", "--trust", "--auto-approve", "--workdir", "/home/<compte>/Bureau/Diaulos/prototypes/vibe/out/p3-plugin/work", "Answer with the single word READY."], "module": "vibe.out.p3-plugin.vibe_home.tools.agent_bridge_probe", "tui_loaded": true, "threads": ["MainThread"]}
+{"t": 1794489081.15, "pid": 223790, "kind": "app-found", "after": 0.582, "cls": "VibeApp"}
+{"t": 1794489092.542, "pid": 223790, "kind": "claimed", "since_file": 0.058, "text": "Message from probe: reply with the single word KIWI1."}
+{"t": 1794489092.542, "pid": 223790, "kind": "deliver", "path": "handle_user_message", "agent_running": false, "bottom": "input", "since_file": 0.058}
+{"t": 1794489097.066, "pid": 223790, "kind": "claimed", "since_file": 0.088, "text": "Message from probe: reply with the single word KIWI2."}
+{"t": 1794489097.066, "pid": 223790, "kind": "deliver", "path": "handle_user_message", "agent_running": false, "bottom": "input", "since_file": 0.088}
+{"t": 1794489101.097, "pid": 223790, "kind": "claimed", "since_file": 0.03, "text": "Message from probe: reply with the single word KIWI3."}
+{"t": 1794489101.098, "pid": 223790, "kind": "deliver", "path": "handle_user_message", "agent_running": false, "bottom": "input", "since_file": 0.03}
+{"t": 1794489105.139, "pid": 223790, "kind": "claimed", "since_file": 0.078, "text": "Message from probe: reply with the single word KIWI4."}
+{"t": 1794489105.139, "pid": 223790, "kind": "deliver", "path": "handle_user_message", "agent_running": false, "bottom": "input", "since_file": 0.079}
+{"t": 1794489121.841, "pid": 223790, "kind": "claimed", "since_file": 0.055, "text": "Message from probe: reply with the single word LIME1."}
+{"t": 1794489121.841, "pid": 223790, "kind": "deliver", "path": "enqueue_prompt", "agent_running": true, "bottom": "input", "since_file": 0.055}
+{"t": 1794489153.445, "pid": 223790, "kind": "claimed", "since_file": 0.073, "text": "Message from probe: reply with the single word LIME2.\n"}
+{"t": 1794489153.446, "pid": 223790, "kind": "deliver", "path": "enqueue_prompt", "agent_running": true, "bottom": "input", "since_file": 0.074}
+{"t": 1794489187.548, "pid": 223790, "kind": "claimed", "since_file": 0.078, "text": "Message from probe: reply with the single word LIME3."}
+{"t": 1794489187.548, "pid": 223790, "kind": "deliver", "path": "handle_user_message", "agent_running": false, "bottom": "input", "since_file": 0.078}
+{"t": 1794489208.71, "pid": 223790, "kind": "claimed", "since_file": 0.011, "text": "Message from probe: do not open any file, do not call any tool. Say whether the text ZEBRA appears in this message, then the word OLIVE1. See @README.md"}
+{"t": 1794489208.711, "pid": 223790, "kind": "deliver", "path": "handle_user_message", "agent_running": false, "bottom": "input", "since_file": 0.011}
+{"t": 1794489311.026, "pid": 228517, "kind": "import", "argv": ["/home/<compte>/.local/bin/vibe", "-p", "Reply with the single word RESUMED1.", "--resume", "71861a26-dbc7-821d-2cd0-4ea93de2b1c9", "--max-price", "0.10", "--trust", "--workdir", "/home/<compte>/Bureau/Diaulos/prototypes/vibe/out/p3-plugin/work", "--output", "text"], "module": "vibe.out.p3-plugin.vibe_home.tools.agent_bridge_probe", "tui_loaded": false, "threads": ["MainThread"]}

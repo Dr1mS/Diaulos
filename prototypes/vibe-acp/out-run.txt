@@ -1,0 +1,102 @@
+== step 1: session/new
+{
+ "mode": "new",
+ "permission_requests": [],
+ "updates": {
+  "available_commands_update": 1,
+  "user_message_chunk": 1,
+  "session_info_update": 1,
+  "agent_thought_chunk": 10,
+  "agent_message_chunk": 2,
+  "usage_update": 1
+ },
+ "agent": {
+  "name": "@mistralai/mistral-vibe",
+  "title": "Mistral Vibe",
+  "version": "2.20.0"
+ },
+ "load_session_capability": true,
+ "session_response": {
+  "sessionId": "ca66e9f6-781e-ac24-dd9f-13fd66d33e18"
+ },
+ "set_max_turns": "ok",
+ "set_max_tokens": "ok",
+ "prompt_result": {
+  "stopReason": "end_turn",
+  "usage": {
+   "totalTokens": 6149,
+   "inputTokens": 6113,
+   "outputTokens": 36
+  }
+ },
+ "exit": 0
+}
+  session_20261112_131947_ca66e9f6 id=ca66e9f6-781e-ac24-dd9f-13fd66d33e18 title='Reply with the single word OK1.' source=auto messages=2 cost=$0.0094395 tokens=6149
+== step 2: title written into meta.json
+  session_20261112_131947_ca66e9f6 id=ca66e9f6-781e-ac24-dd9f-13fd66d33e18 title='acp-probe-title' source=manual messages=2 cost=$0.0094395 tokens=6149
+== step 3: new process, session/load ca66e9f6-781e-ac24-dd9f-13fd66d33e18
+{
+ "mode": "load",
+ "permission_requests": [
+  {
+   "options": [
+    [
+     "allow_once",
+     "allow_once"
+    ],
+    [
+     "allow_always",
+     "allow_always"
+    ],
+    [
+     "allow_always_permanent",
+     "allow_always"
+    ],
+    [
+     "reject_once",
+     "reject_once"
+    ]
+   ],
+   "tool_call": {
+    "toolCallId": "VL1b9ikXL"
+   },
+   "answered": "allow_once"
+  }
+ ],
+ "updates": {
+  "user_message_chunk": 2,
+  "agent_thought_chunk": 28,
+  "agent_message_chunk": 2,
+  "usage_update": 3,
+  "available_commands_update": 1,
+  "tool_call": 2,
+  "tool_call_update": 1
+ },
+ "agent": {
+  "name": "@mistralai/mistral-vibe",
+  "title": "Mistral Vibe",
+  "version": "2.20.0"
+ },
+ "load_session_capability": true,
+ "session_response": {
+  "sessionId": "ca66e9f6-781e-ac24-dd9f-13fd66d33e18"
+ },
+ "set_max_turns": "ok",
+ "set_max_tokens": "ok",
+ "prompt_result": {
+  "stopReason": "end_turn",
+  "usage": {
+   "totalTokens": 12559,
+   "inputTokens": 12473,
+   "outputTokens": 86
+  },
+  "_meta": {
+   "show_feedback_prompt": true
+  }
+ },
+ "exit": 0
+}
+  session_20261112_131947_ca66e9f6 id=ca66e9f6-781e-ac24-dd9f-13fd66d33e18 title='acp-probe-title' source=manual messages=6 cost=$0.0193545 tokens=12559
+== MCP servers started (config: probe; mcpServers param: extra)
+  config-server: 3 starts, 1 tools/call
+  extra: 0 starts, 0 tools/call

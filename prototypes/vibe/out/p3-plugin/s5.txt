@@ -1,0 +1,8 @@
+before:
+  session_20261112_131120_71861a26 id=71861a26-dbc7-821d-2cd0-4ea93de2b1c9 parent=None title='probe-s8' source=manual messages=26 cwd=/home/<compte>/Bureau/Diaulos/prototypes/vibe/out/p3-plugin/work
+run: vibe -p ... --resume 71861a26-dbc7-821d-2cd0-4ea93de2b1c9 --max-price 0.10 --trust --workdir /home/<compte>/Bureau/Diaulos/prototypes/vibe/out/p3-plugin/work --output text
+RESUMED1
+exit=0
+after:
+  session_20261112_131120_71861a26 id=71861a26-dbc7-821d-2cd0-4ea93de2b1c9 parent=None title='probe-s8' source=manual messages=26 cwd=/home/<compte>/Bureau/Diaulos/prototypes/vibe/out/p3-plugin/work
+  session_20261112_131511_54ff6bf8 id=54ff6bf8-7c6d-ef5f-b2e9-53d098f9e525 parent=None title='Answer with the single word READY.' source=auto messages=28 cwd=/home/<compte>/Bureau/Diaulos/prototypes/vibe/out/p3-plugin/work

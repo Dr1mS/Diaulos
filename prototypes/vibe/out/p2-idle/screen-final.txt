@@ -1,0 +1,50 @@
+
+
+> Call the tool probe_ping exactly once, then answer with the single word READY.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+■ Thought ▶
+
+✓ MCP tool ping completed                                                                                                                                      ▅
+  ⎣ ▶ 4 lines
+
+■ Thought ▶
+
+  READY
+✗ [probe-post] Failed, retrying (3 retries remaining)
+
+■ Thought ▶
+
+  PONG1
+✗ [probe-post] Failed, retrying (2 retries remaining)
+
+■ Thought ▶
+
+  PONG2
+✗ [probe-post] Failed, retrying (1 retry remaining)
+
+■ Thought ▶
+
+  PONG3
+✗ [probe-post] Failed, retries exhausted (3/3)
+
+
+> Reply with the single word HUMAN1.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+■ Thought ▶
+
+  HUMAN1
+  ⎣ Interrupted · What should Vibe do instead?
+
+» Queued — press Enter to send, type to add
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Reply with the single word HUMAN2.
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── default ─
+>
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+~/Bureau/Diaulos/prototypes/vibe/out/p2-idle/work                                                                                            7k/200k tokens (4%)

@@ -1,0 +1,6 @@
+--- A: no permission setting
+DONE
+probe tools/call count: 0
+--- B: [tools.probe_ping] permission = always
+DONE
+probe tools/call count: 1

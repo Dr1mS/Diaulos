@@ -1,0 +1,9 @@
+# Copied config and vibe's own caches stay out of git.
+out/*/vibe_home/config.toml
+out/*/vibe_home/vibehistory
+out/*/vibe_home/cache.toml
+out/*/vibe_home/connector_bootstrap_cache.json
+out/*/vibe_home/trusted_folders.toml
+out/*/vibe_home/logs/vibe.log
+out/*/work/
+__pycache__/

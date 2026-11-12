@@ -1,0 +1,4 @@
+{"token": "KIWI1", "consumed": 0.058, "deliver": 0.058, "path": "handle_user_message", "user": 1.41, "injected_flag": false, "reply": 1.41}
+{"token": "KIWI2", "consumed": 0.088, "deliver": 0.088, "path": "handle_user_message", "user": 1.007, "injected_flag": false, "reply": 1.007}
+{"token": "KIWI3", "consumed": 0.029, "deliver": 0.03, "path": "handle_user_message", "user": 0.907, "injected_flag": false, "reply": 0.907}
+{"token": "KIWI4", "consumed": 0.079, "deliver": 0.079, "path": "handle_user_message", "user": 1.058, "injected_flag": false, "reply": 1.058}

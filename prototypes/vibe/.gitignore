@@ -1,0 +1,17 @@
+# Raw or private run files: keep only the logs, measures, screens and sessions.
+out/*/tty.raw
+out/*/keys
+out/*/stop
+out/*/child.pid
+out/*/driver.log
+out/*/inject*
+out/*/work/
+out/*/vibe_home/config.toml
+out/*/vibe_home/vibehistory
+out/*/vibe_home/cache.toml
+out/*/vibe_home/connector_bootstrap_cache.json
+out/*/vibe_home/trusted_folders.toml
+out/*/vibe_home/tools/
+out/*/vibe_home/hooks.toml
+out/*/vibe_home/logs/vibe.log
+__pycache__/
