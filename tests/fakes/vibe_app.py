@@ -272,7 +272,14 @@ class VibeApp:
     def stop(self):
         if self._loop is not None:
             loop = self._loop
-            loop.call_soon_threadsafe(loop.stop)
+
+            async def finish():  # end a running turn, as quitting vibe does
+                tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                loop.stop()
+            asyncio.run_coroutine_threadsafe(finish(), loop)
             self._thread.join(5)
             self._loop = None
             loop.close()

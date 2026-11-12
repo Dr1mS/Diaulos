@@ -81,11 +81,16 @@ def incoming_text(msgs, me):
     """The bridge's message blocks for vibe: every `@` gets a word joiner, so vibe does not
     inline a file (path_prompt.py rejects U+2060), and the last line names bridge_send."""
     text = _core()._incoming_text(msgs, me)
-    text = text[:text.rfind("\nReply with: ")]
+    end = text.rfind("\nReply with: ")
+    if end >= 0:
+        text = text[:end]
     text = text.replace("@", "@" + WORD_JOINER)
     senders = sorted({m["from"] for m in msgs})
     to = senders[0] if len(senders) == 1 else "<the from of the message>"
-    return text + f"\nReply with the bridge_send tool, to={to}  (you are {me})"
+    # A failed send must not loop: a first real TUI run retried 16 times (0.52 $) on an `ext:` sender
+    # with no reader.
+    return (text + "\nIf bridge_send answers with an error, do not call it again: say so in your answer."
+            + f"\nReply with the bridge_send tool, to={to}  (you are {me})")
 
 
 # ---------------------------------------------------------------- in-flight records
@@ -110,8 +115,11 @@ def clear_inflight(suffix):
         os.remove(_inflight_path(suffix))
 
 
-def recover_inflight(suffix):
-    """Put back the messages of an in-flight record whose process is dead. Returns how many."""
+def recover_inflight(suffix, quiet=False):
+    """Put back the messages of an in-flight record whose process is dead. Returns how many.
+
+    `suffix` is a conversation suffix, or "new" for the vibe:new worker. `quiet`: print
+    nothing (bridge.py calls it from `list` and from the MCP server, whose stdout is JSON-RPC)."""
     core = _core()
     path = _inflight_path(suffix)
     try:
@@ -127,7 +135,7 @@ def recover_inflight(suffix):
              and os.path.exists(p)]
     core.unclaim(f"vibe:{suffix}", [(p, None) for p in paths])
     clear_inflight(suffix)
-    if paths:
+    if paths and not quiet:
         print(f"{_now()} put back {len(paths)} message(s) of dead pid {record.get('pid')} "
               f"({record.get('role')})", flush=True)
     return len(paths)
@@ -147,9 +155,12 @@ class Acp:
         binary = core._vibe_acp_bin()
         if not binary:
             raise AcpError("the vibe-acp command is not installed or not on PATH")
-        self.proc = subprocess.Popen([binary], cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=sys.stderr, text=True, encoding="utf-8", errors="replace",
-                                     bufsize=1)
+        try:
+            self.proc = subprocess.Popen([binary], cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=sys.stderr, text=True, encoding="utf-8", errors="replace",
+                                         bufsize=1)
+        except OSError as e:
+            raise AcpError(f"could not start vibe-acp: {e!r}")
         self.inbox = queue.Queue()
         self.next_id = 0
         self.text = []
@@ -372,6 +383,7 @@ def vibe_new():
         if core._alive((core._read_peer(new) or {}).get("pid")):
             return
         core._update_peer(new, pid=os.getpid(), gone=True)  # never listed: only marks the running worker
+        recover_inflight("new")
     lim = limits()
     try:
         while True:
@@ -379,6 +391,7 @@ def vibe_new():
             if not claimed:
                 return
             path, msg = claimed[0]
+            write_inflight("new", None, claimed, "vibe-new")
             options = msg.get("new") if isinstance(msg.get("new"), dict) else {}
             workspace, name = options.get("workspace"), options.get("name")
             cwd = workspace if workspace and os.path.isdir(workspace) else os.path.expanduser("~")
@@ -398,9 +411,16 @@ def vibe_new():
                 reply = acp.prompt(session, incoming_text([msg], address), lim["max_turns"])
             except AcpError as e:
                 error = str(e)
-            finally:
+            except Exception as e:  # a bug here must not lose the message: back to the inbox
                 if acp is not None:
                     acp.close()
+                core.unclaim(new, claimed)
+                clear_inflight("new")
+                print(f"{_now()} vibe:new for {msg['id']} stopped by {e!r}; message put back", flush=True)
+                raise
+            if acp is not None:
+                acp.close()
+            clear_inflight("new")
             if error:
                 with contextlib.suppress(OSError):
                     os.rename(path, path + ".failed")

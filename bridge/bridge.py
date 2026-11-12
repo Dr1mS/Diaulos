@@ -432,11 +432,32 @@ def _vibe_tui_alive(peer):
     return _alive(peer.get("tui_pid")) and time.time() - peer.get("tui_seen", 0) < VIBE_BEAT_SECONDS
 
 
+def _vibe_recover():
+    """Put back in their inbox the messages of in-flight records left by a dead vibe plugin,
+    vibe-run or vibe-new (docs/VIBE-DESIGN.md §4.2): a killed vibe never loses a message."""
+    try:
+        names = os.listdir(_path("state", "vibe-inflight"))
+    except OSError:
+        return
+    for name in names:
+        key = name[:-5] if name.endswith(".json") else None
+        if not key or not (key == "new" or _vibe().SUFFIX_RE.match(key)):
+            continue
+        with contextlib.suppress(Exception, SystemExit):
+            with _locked(_path("state", f"vibe-{key}"), wait=0.5):
+                back = _vibe_runner().recover_inflight(key, quiet=True)
+            if back and key == "new":
+                _spawn_detached([sys.executable, "-u", SCRIPT, "vibe-new"], "vibe-new.log")
+            elif back:
+                _wake_vibe(f"vibe:{key}")  # nobody may be there to take them otherwise
+
+
 def _vibe_peers(days=RECENT_DAYS):
     """vibe conversations saved in the last `days` (None: all), and live ones not saved yet.
 
     A conversation whose TUI, vibe-run or vibe-acp runs is listed whatever its age.
     """
+    _vibe_recover()
     found = {}
     with contextlib.suppress(Exception):  # an unreadable vibe setup must not break `list`
         for c in _vibe().conversations(days).values():
@@ -1915,7 +1936,7 @@ def _remote():
     """remote.py, sharing this module rather than loading bridge.py a second time."""
     sys.modules.setdefault("bridge", sys.modules[__name__])
     if os.path.dirname(SCRIPT) not in sys.path:
-        sys.path.insert(0, os.path.dirname(SCRIPT))
+        sys.path.append(os.path.dirname(SCRIPT))  # at the end: in vibe's process, vibe's own names come first
     import remote
     return remote
 

@@ -234,7 +234,8 @@ class VibeRunTest(RunnerSetup):
             json.dump({"pid": dead.pid, "role": "runner", "session": self.ids["renamed"][0], "paths": [path]}, f)
         self.send(ADDRESS, "new one")
         self.assertTrue(self.runner_done(), self.log_of())
-        self.assertIn("put back 1 message(s) of dead pid", self.log_of())
+        # Put back either by `send` (peers("vibe") recovers dead records, fix T3b-bis) or by vibe-run.
+        self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "state", "vibe-inflight", RENAMED + ".json")))
         prompts = self.events("prompt")
         self.assertEqual(sum(p["messages"] for p in prompts), 2, prompts)
         text = self.recv("session/prompt")[0]["params"]["prompt"][0]["text"]
@@ -293,6 +294,99 @@ class VibeNewTest(RunnerSetup):
         self.assertIn("was created, but its first turn failed", note[0]["body"])
         inbox = os.path.join(self.bridge_home, "archive", "vibe-new")
         self.assertEqual(len([n for n in os.listdir(inbox) if n.endswith(".failed")]), 1)
+
+
+@unittest.skipIf(WINDOWS, "the fake vibe-acp is a script run through PATH")
+class NeverLostTest(RunnerSetup):
+    """Fix T3b-bis (review 07): in-flight records found by `list`, vibe-new records, text guard."""
+
+    def dead_pid(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def leave_record(self, key, address, body):
+        archive = os.path.join(self.bridge_home, "archive", address.replace(":", "-"))
+        os.makedirs(archive, exist_ok=True)
+        path = os.path.join(archive, f"1-{key}.json")
+        msg = {"id": "lost-" + key, "from": "claude", "to": address, "ts": "t", "body": body}
+        if key == "new":
+            msg["new"] = {"workspace": self.workspace}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(msg, f)
+        folder = os.path.join(self.bridge_home, "state", "vibe-inflight")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, key + ".json"), "w", encoding="utf-8") as f:
+            json.dump({"pid": self.dead_pid(), "role": "tui", "session": None, "paths": [path]}, f)
+        return path
+
+    def test_list_puts_back_a_dead_record_and_wakes_the_conversation(self):
+        self.leave_record(RENAMED, ADDRESS, "lost in a killed vibe")
+        listed = self.listing()
+        self.assertNotIn("put back", listed, "list printed the runner's log line")
+        self.assertTrue(self.runner_done(), self.log_of())
+        text = wait_for(lambda: self.recv("session/prompt"), 15)
+        self.assertTrue(text, self.log_of())
+        self.assertIn("lost in a killed vibe", text[0]["params"]["prompt"][0]["text"])
+        self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "state", "vibe-inflight",
+                                                     RENAMED + ".json")))
+
+    def test_a_live_record_is_not_taken_back(self):
+        path = self.leave_record(RENAMED, ADDRESS, "being delivered")
+        record = os.path.join(self.bridge_home, "state", "vibe-inflight", RENAMED + ".json")
+        with open(record, encoding="utf-8") as f:
+            data = json.load(f)
+        data["pid"] = os.getpid()
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        self.listing()
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(self.inbox(ADDRESS), [])
+
+    def test_vibe_new_record_of_a_dead_worker_is_replayed(self):
+        self.leave_record("new", "vibe:new", "start me")
+        self.listing()
+        got = self.wait_inbox("claude", count=2)  # the fake's pong and the bridge's note
+        self.assertTrue(any("started the vibe conversation" in m["body"] for m in got), self.state("vibe-new.log"))
+        self.assertEqual(len(self.recv("session/new")), 1)
+
+    def test_vibe_new_bug_puts_the_message_back(self):
+        bridge = self.load_bridge()
+        os.environ["VIBE_HOME"] = self.vibe_home
+        self.addCleanup(os.environ.pop, "VIBE_HOME", None)
+        runner = bridge._vibe_runner()
+        self.addCleanup(sys.modules.pop, "agent_bridge_vibe_runner", None)
+        self.addCleanup(sys.modules.pop, "agent_bridge_vibe_sessions", None)
+        self.addCleanup(sys.modules.pop, "agent_bridge_core", None)
+        sys.modules["agent_bridge_core"] = bridge
+
+        class Broken:
+            def __init__(self, *args):
+                raise RuntimeError("bug in the runner")
+        original, runner.Acp = runner.Acp, Broken
+        self.addCleanup(setattr, runner, "Acp", original)
+        os.makedirs(os.path.join(self.bridge_home, "inbox", "vibe-new"), exist_ok=True)
+        msg = {"id": "m1", "from": "claude", "to": "vibe:new", "ts": "t", "body": "hello", "new": {}}
+        with open(os.path.join(self.bridge_home, "inbox", "vibe-new", "1-m1.json"), "w") as f:
+            json.dump(msg, f)
+        with self.assertRaises(RuntimeError):
+            runner.vibe_new()
+        self.assertEqual([m["id"] for m in bridge.take("vibe:new")], ["m1"])
+        self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "state", "vibe-inflight", "new.json")))
+
+    def test_incoming_text_without_the_reply_line(self):
+        bridge = self.load_bridge()
+        runner = bridge._vibe_runner()
+        self.addCleanup(sys.modules.pop, "agent_bridge_vibe_runner", None)
+        self.addCleanup(sys.modules.pop, "agent_bridge_core", None)
+        sys.modules["agent_bridge_core"] = bridge
+        original = bridge._incoming_text
+        self.addCleanup(setattr, bridge, "_incoming_text", original)
+        bridge._incoming_text = lambda msgs, me: "header\nblock"
+        msgs = [{"id": "1", "from": "claude", "ts": "t", "body": "b"}]
+        self.assertEqual(runner.incoming_text(msgs, ADDRESS),
+                         "header\nblock\nIf bridge_send answers with an error, do not call it again: say so "
+                         f"in your answer.\nReply with the bridge_send tool, to=claude  (you are {ADDRESS})")
 
 
 @unittest.skipUnless(os.environ.get("DIAULOS_REAL_VIBE") == "1" and shutil.which("vibe-acp"),
