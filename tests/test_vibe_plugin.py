@@ -525,7 +525,9 @@ class AcpTest(PluginSetup):
         self.assertIs(peer["price_cap"], False)
         self.assertEqual(peer["acp_pid"], os.getpid())
         self.core._update_peer("vibe:" + self.SUFFIX, workspace=self.workspace)
-        os.kill(os.getpid(), 0)  # acp_pid is this test process: alive, no TUI
+        # acp_pid is this test process: alive, no TUI. Never os.kill(pid, 0) in a test: on Windows
+        # signal 0 is CTRL_C_EVENT, sent to the whole console, and it stops the test run (CI, T5c).
+        self.assertTrue(self.core._alive(os.getpid()))
         self.assertIn("price cap not set, max_turns only", self.listing())
 
     def test_a_bad_price_is_logged_and_nothing_breaks(self):

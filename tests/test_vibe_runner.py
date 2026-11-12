@@ -88,6 +88,7 @@ class RunnerSetup(BridgeTest):
 
 
 def _alive(pid):
+    """Linux only (/proc, and os.kill(pid, 0) is a Ctrl-C on Windows): for the classes skipped there."""
     try:
         os.kill(pid, 0)
     except OSError:
