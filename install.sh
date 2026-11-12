@@ -4,6 +4,7 @@
 #   ~/.gemini/config/hooks.json          global agy hooks, under the key "agent-bridge"
 #   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill (and diaulos-remote, for other machines)
 #   ~/.claude/settings.json              allow rule for bridge commands
+#   ~/.vibe/tools/agent_bridge.py        Mistral Vibe tools, if vibe is installed ($VIBE_HOME)
 # Re-run it to update. Each config file it edits is backed up first as <file>.bak-agent-bridge.
 # Options:
 #   --shell       a plain `claude` starts with the MCP channel (~/.bashrc)
@@ -28,7 +29,15 @@ mkdir -p "$BRIDGE_HOME"
 install -m 755 "$REPO/bridge/bridge.py" "$BRIDGE_HOME/bridge.py"
 install -m 755 "$REPO/bridge/mcp_channel.py" "$BRIDGE_HOME/mcp_channel.py"
 install -m 755 "$REPO/bridge/remote.py" "$BRIDGE_HOME/remote.py"
-echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel,remote}.py"
+for f in vibe_sessions.py vibe_runner.py vibe_plugin.py; do
+  install -m 644 "$REPO/bridge/$f" "$BRIDGE_HOME/$f"
+done
+echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel,remote,vibe_sessions,vibe_runner,vibe_plugin}.py"
+
+# Mistral Vibe: one file in $VIBE_HOME/tools, no vibe config edited.
+VIBE_ON_PATH=0
+command -v vibe >/dev/null && VIBE_ON_PATH=1
+python3 "$REPO/install/vibe_install.py" install "$REPO" "$BRIDGE_HOME" "${VIBE_HOME:-$HOME/.vibe}" "$VIBE_ON_PATH"
 if ! python3 -c "import cryptography" 2>/dev/null; then
   echo "remote      -> optional: python3 -m pip install cryptography, to message other machines"
 fi

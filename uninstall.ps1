@@ -111,5 +111,10 @@ foreach ($Name in 'agy-bridge', 'diaulos-remote') {
     $SkillDir = Join-Path $HOME ".claude\skills\$Name"
     if (Test-Path $SkillDir) { Remove-Item $SkillDir -Recurse -Force; Write-Host "removed claude skill $Name" }
 }
+# Mistral Vibe tools (vibe sessions are never touched, even with -Purge); same code as uninstall.sh.
+$VibeHome = if ($env:VIBE_HOME) { $env:VIBE_HOME } else { Join-Path $HOME '.vibe' }
+if ($Python) { & $Python (Join-Path $PSScriptRoot 'install\vibe_install.py') uninstall $BridgeHome $VibeHome }
 Remove-Item (Join-Path $BridgeHome 'bridge.py'), (Join-Path $BridgeHome 'mcp_channel.py'), (Join-Path $BridgeHome 'remote.py') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $BridgeHome 'vibe_sessions.py'), (Join-Path $BridgeHome 'vibe_runner.py'), (Join-Path $BridgeHome 'vibe_plugin.py') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $BridgeHome '__pycache__') -Recurse -Force -ErrorAction SilentlyContinue
 if ($Purge -and (Test-Path $BridgeHome)) { Remove-Item $BridgeHome -Recurse -Force; Write-Host "purged $BridgeHome" }

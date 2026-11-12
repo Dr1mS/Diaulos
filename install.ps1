@@ -4,6 +4,7 @@
 #   ~/.gemini/config/hooks.json          global agy hooks, under the key "agent-bridge"
 #   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill (and diaulos-remote, for other machines)
 #   ~/.claude/settings.json              allow rule for bridge commands
+#   ~/.vibe/tools/agent_bridge.py        Mistral Vibe tools, if vibe is installed ($env:VIBE_HOME)
 # Re-run it to update. Each config file it edits is backed up first as <file>.bak-agent-bridge.
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1 [-Shell]
 param([switch]$Shell)
@@ -28,7 +29,14 @@ New-Item -ItemType Directory -Force $BridgeHome | Out-Null
 Copy-Item (Join-Path $Repo 'bridge\bridge.py') $BridgeHome -Force
 Copy-Item (Join-Path $Repo 'bridge\mcp_channel.py') $BridgeHome -Force
 Copy-Item (Join-Path $Repo 'bridge\remote.py') $BridgeHome -Force
-Write-Host "bridge      -> $BridgeHome\{bridge,mcp_channel,remote}.py"
+foreach ($f in 'vibe_sessions.py', 'vibe_runner.py', 'vibe_plugin.py') { Copy-Item (Join-Path $Repo "bridge\$f") $BridgeHome -Force }
+Write-Host "bridge      -> $BridgeHome\{bridge,mcp_channel,remote,vibe_sessions,vibe_runner,vibe_plugin}.py"
+
+# Mistral Vibe: one file in $VIBE_HOME\tools, no vibe config edited (same code as install.sh).
+$VibeHome = if ($env:VIBE_HOME) { $env:VIBE_HOME } else { Join-Path $HOME '.vibe' }
+$VibeOnPath = if (Get-Command vibe -ErrorAction SilentlyContinue) { '1' } else { '0' }
+& $Python (Join-Path $Repo 'install\vibe_install.py') install $Repo $BridgeHome $VibeHome $VibeOnPath
+if ($LASTEXITCODE -ne 0) { throw 'vibe tools step failed' }
 $ErrorActionPreference = 'Continue'
 & $Python -c 'import cryptography' 2>$null | Out-Null
 $hasCrypto = $LASTEXITCODE -eq 0
