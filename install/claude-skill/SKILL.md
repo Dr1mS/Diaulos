@@ -24,7 +24,7 @@ It expires after 30 min at most; start it again if the conversation is still goi
 With the channel, use the `send` and `list_agents` tools of the `agent-bridge` MCP server. Without it:
 
 ```
-python3 ~/.agent-bridge/bridge.py list                     # live agy and Claude sessions
+python3 ~/.agent-bridge/bridge.py list                     # live agy, Claude and vibe sessions
 python3 ~/.agent-bridge/bridge.py send agy "<text>"        # the only other active agy session
 python3 ~/.agent-bridge/bridge.py send agy@<workspace-substring> "<text>"
 python3 ~/.agent-bridge/bridge.py send claude:<name> "<text>"
@@ -35,6 +35,8 @@ To reply to a message, use its `from` address as the recipient. agy sessions can
 `agy:new` starts a new Antigravity Desktop conversation, with the message as its first prompt (Linux, needs a Desktop window whose relay runs). `agy:new@<title>` also names it, and `--workspace <dir or Desktop workspace name>` (the `workspace` argument of the MCP `send` tool) picks where it works; a Desktop workspace files it there. `list --days N` / `list --all` (`days` / `all` in `list_agents`) also lists Desktop and agy CLI conversations older than 7 days. The bridge then sends you the new conversation's address, `agy:<conversationId>`, and the conversation's replies come from it.
 
 `agy:new-cli` and `agy:new-cli@<name>` start a new agy CLI conversation instead, with `agy -p`, in your directory unless `--workspace` says otherwise; the bridge sends you its address once its first turn is done. An agy CLI conversation that `list` shows with `no process` is not lost: a message to it runs `agy -p --conversation <id>` in its directory, one turn per batch of messages.
+
+A Mistral Vibe conversation is `vibe:<id>` (the last 12 hex digits of its session id, the same after `/compact` or `/clear`), or `vibe:<name>` once renamed with `/rename`. An open vibe TUI gets the message as its next prompt when it is idle (`list` says "TUI: wakes on message"); after Esc it waits for Enter. A closed one (`closed: wakes with vibe-acp`) is woken with `vibe-acp`: one background turn per batch of messages, in its directory. `vibe:new` and `vibe:new@<name>` start a new vibe conversation with `vibe-acp`, in your directory unless `--workspace` says otherwise; the bridge then sends you its address.
 
 An `ext:<name>` address is a program connected to the bridge (a bot, a CI job, a script). It is live while it runs `bridge.py watch ext:<name> --json`; reply to it with `send` like to any agent.
 

@@ -20,7 +20,7 @@ Security model:
     it. A frame that was changed, replayed or sealed with another key is dropped.
   - A paired machine reaches only the local sessions its allow list names, plus
     the local sessions that wrote to it in the last 24 hours (so replies work).
-    Wildcards never cover agy:new and agy:new-cli: those must be named exactly.
+    Wildcards never cover agy:new, agy:new-cli and vibe:new: those must be named exactly.
   - The gateway writes the sender as `remote:<peer>/<address>`: the peer name is
     the one you chose and is authenticated by the key, so a remote agent can
     never pass for a local one. Messages cannot hop on to a third machine.
@@ -82,7 +82,7 @@ NOTICES = {
 }
 USER_AGENT = "diaulos-remote/1"
 PEER_RE = bridge.PEER_NAME_RE
-LOCAL_RE = bridge.ADDRESS_RE  # a sender address on the other machine: agy|claude|ext[:name]
+LOCAL_RE = bridge.ADDRESS_RE  # a sender address on the other machine: agy|claude|ext|vibe[:name]
 FRAME = struct.Struct(">QHH")  # seq, part, parts
 PAIR_KINDS = ("inviter", "joiner")
 
@@ -424,7 +424,7 @@ def record(role, relay, root, allow=()):
 def _ask_allow(name):
     print(f"\nWhich of your sessions may {name} message first? Replies to sessions that wrote to {name} "
           "always get through. Examples: claude:review  agy:*  ext:ci. Empty: none (you can run "
-          f"`remote allow {name} <pattern>` later). agy:new and agy:new-cli are only allowed by exact name.")
+          f"`remote allow {name} <pattern>` later). agy:new, agy:new-cli and vibe:new are only allowed by exact name.")
     return [p for p in _ask("Patterns, separated by spaces: ").split() if p]
 
 
@@ -603,7 +603,7 @@ def allowed(record, state, address, target):
     if target == address and time.time() - state.get("contacts", {}).get(address, 0) < CONTACT_SECONDS:
         return True
     for pattern in record.get("allow", []):
-        if address in (bridge.NEW, bridge.NEW_CLI):
+        if address in (bridge.NEW, bridge.NEW_CLI, bridge.VIBE_NEW):
             if pattern == address:
                 return True
         elif fnmatch.fnmatchcase(address, pattern):
@@ -612,9 +612,9 @@ def allowed(record, state, address, target):
 
 
 def _new_cli_workspace(name):
-    """A fresh, empty folder for each agy CLI conversation a peer starts: outside the bridge
+    """A fresh, empty folder for each agy CLI or vibe conversation a peer starts: outside the bridge
     home and its keys, and never shared, so one conversation cannot plant rule files
-    (GEMINI.md, .agents/) for the next."""
+    (GEMINI.md, .agents/, .vibe/) for the next."""
     import tempfile
     base = os.path.join(os.path.expanduser("~"), ".cache", "diaulos-remote", name)
     os.makedirs(base, mode=0o700, exist_ok=True)
@@ -813,7 +813,7 @@ class Gateway:
     def on_msg(self, name, p):
         frm, target, body = p.get("from"), p.get("to"), p.get("body")
         if not (isinstance(frm, str) and LOCAL_RE.match(frm) and isinstance(target, str)
-                and re.match(r"^(agy|claude|ext)([:@][^\s/\\]{1,200})?$", target) and isinstance(body, str)
+                and re.match(r"^(agy|claude|ext|vibe)([:@][^\s/\\]{1,200})?$", target) and isinstance(body, str)
                 and len(body.encode()) <= MAX_BODY):
             log(f"dropped a malformed message from {name}")
             return
@@ -838,7 +838,7 @@ class Gateway:
             log(f"refused {p.get('id')} from {sender} to {address}: not in the allow list")
             self.notice(name, frm, "refused")
             return
-        workspace = _new_cli_workspace(name) if address == bridge.NEW_CLI else None
+        workspace = _new_cli_workspace(name) if address in (bridge.NEW_CLI, bridge.VIBE_NEW) else None
         try:
             msg = bridge.send(target, body, sender, workspace)
         except SystemExit as e:
@@ -884,7 +884,7 @@ class Gateway:
             address = peer["address"]
             if LOCAL_RE.match(address) and allowed(rec, {}, address, address):
                 found.append({"address": address, "name": peer.get("name") or ""})
-        for special in (bridge.NEW, bridge.NEW_CLI):
+        for special in (bridge.NEW, bridge.NEW_CLI, bridge.VIBE_NEW):
             if special in rec.get("allow", []):
                 found.append({"address": special, "name": ""})
         return sorted(found, key=lambda a: a["address"])[:ROSTER_MAX]

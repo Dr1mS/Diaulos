@@ -386,6 +386,12 @@ Les heures sont en UTC (16:26 heure locale). Aller-retour de 3 à 19 s, le temps
   - **Piège** : une session Claude Code ouverte avant la réinstallation garde l'ancien serveur MCP en mémoire. Son outil `send` ne connaît pas `remote:`. On envoie alors par la CLI avec `AGENT_BRIDGE_ADDRESS=<sa propre adresse>`, ou on relance `claude`.
 - **État de l'art** : `docs/ETAT-DE-L-ART.md` compare Diaulos aux boîtes aux lettres MCP, aux orchestrateurs tmux, aux *agent teams* de Claude Code et aux protocoles A2A, ACP et ANP. La recherche est d'une session agy, les faits sont vérifiés avec l'API GitHub. On y trouve aussi l'observation de l'auteur sur le coût en tokens des *agent teams*, avec un protocole pour la mesurer.
 
+## 22. Mistral Vibe, jalon J1 : sondes et conception validées
+
+- **Sondes** (12 nov. 2026, vibe 2.20.0) : `prototypes/vibe/`, `prototypes/vibe-acp/` et `prototypes/vibe-s9/`, commitées en `83891e5` et `8414259`. La conception qui en découle est `docs/VIBE-DESIGN.md`.
+- **Validation** : le jalon J1 a été validé le 12 nov. 2026 à 14:38 (heure de Paris). Le chef d'équipe l'a relayé. La décision porte sur les dix critères, `vibe-acp` compris. En ACP, le seul garde-fou de coût retenu est `max_turns`.
+- **Suite** : J2, le code. On commence par les faux `vibe-acp` et `FakeVibeApp` dans `tests/fakes/` (T5a).
+
 ## Pistes pour agy CLI (pour plus tard)
 
 - **Le tour perdu au premier message** : pas de solution par les hooks (§19). À revoir si agy ajoute un type d'étape qui lance une commande.

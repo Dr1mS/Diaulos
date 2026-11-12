@@ -204,7 +204,8 @@ def _kill_processes_of(bridge_home):
                 peer = json.load(f)
         except (OSError, ValueError):
             continue
-        pids.update(p for p in (peer.get("relay_pid"), peer.get("pid")) if isinstance(p, int))
+        pids.update(p for p in (peer.get("relay_pid"), peer.get("pid"), peer.get("runner_pid"), peer.get("acp_pid"))
+                    if isinstance(p, int))
     state = os.path.join(bridge_home, "state")
     for name in os.listdir(state) if os.path.isdir(state) else []:
         if name.startswith("relay-") and name.endswith(".log"):

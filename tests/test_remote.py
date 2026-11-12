@@ -186,6 +186,9 @@ class RemoteTest(BridgeTest):
         self.assertFalse(allowed({}, contact, "ext:ci-prod", "ext:ci"), "a prefix is no reply")
         self.assertFalse(allowed({}, {"contacts": {"ext:me": time.time() - 2 * 86400}}, "ext:me", "ext:me"))
         self.assertFalse(allowed({"allow": ["*"]}, {}, "remote:x", "remote:x"), "no hop to a third machine")
+        self.assertFalse(allowed({"allow": ["vibe:*"]}, {}, "vibe:new", "vibe:new"), "wildcards never start vibe")
+        self.assertTrue(allowed({"allow": ["vibe:new"]}, {}, "vibe:new", "vibe:new@x"))
+        self.assertTrue(allowed({"allow": ["vibe:*"]}, {}, "vibe:0123456789ab", "vibe:0123456789ab"))
 
     # ---- two machines
 

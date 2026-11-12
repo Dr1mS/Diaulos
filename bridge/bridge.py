@@ -15,12 +15,15 @@ Addresses:
   claude            the inbox a Claude Code session reads with `watch claude`
   agy:<convId>      one agy conversation
   ext:<name>        any other program, live while it runs `watch ext:<name>`
+  vibe:<suffix>     one Mistral Vibe conversation (the last 12 hex of its session ids)
   remote:<peer>/<address>  a session on another machine paired with this one (remote.py)
 `agy` or `claude` alone picks the only other live session of that kind;
 `agy:<name>` picks an agy conversation by its title (set with /rename);
 `agy:new` starts a new Antigravity Desktop conversation with the message as its first prompt,
 `agy:new@<title>` also names it;
 `agy:new-cli` and `agy:new-cli@<name>` start a new agy CLI conversation (agy -p);
+`vibe:<name>` picks a vibe conversation by its /rename title; `vibe:new` and
+`vibe:new@<name>` start a new vibe conversation (vibe-acp);
 `<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
 agy sessions can message each other the same way.
 
@@ -37,6 +40,8 @@ Usage:
   bridge.py agy-relay [--probe TEXT | --inspect]   relay loop / one-off tests (agy shell only)
   bridge.py cli-run <conversationId>               deliver to a sleeping agy CLI conversation (internal)
   bridge.py cli-new                                start the conversations asked from agy:new-cli (internal)
+  bridge.py vibe-run <suffix>                      deliver to a closed vibe conversation with vibe-acp (internal)
+  bridge.py vibe-new                               start the conversations asked from vibe:new (internal)
   bridge.py remote <command>                       pair machines and run the gateway (see remote.py)
 """
 import codecs
@@ -68,6 +73,8 @@ AUTO_SCAN_SECONDS = 10  # auto-relay: how often listing agy peers looks for lang
 RECENT_DAYS = 7  # Desktop conversations modified this recently are reachable even when not loaded
 NEW = "agy:new"  # inbox read by Desktop relays: each message there starts a new conversation
 NEW_CLI = "agy:new-cli"  # each message there starts a new agy CLI conversation with agy -p
+VIBE_NEW = "vibe:new"  # each message there starts a new vibe conversation with vibe-acp
+VIBE_BEAT_SECONDS = 60  # a vibe TUI plugin writes its heartbeat every 10 s: older means gone
 CLI_DIR = AGY_DIRS[0]  # agy CLI data: its index of conversations
 CLI_TURN_SECONDS = 1800  # --print-timeout of one headless agy CLI turn
 CLI_ARG_MAX = 100_000  # a message goes to agy -p as one argument: stay under Linux's 128 KiB per argument
@@ -77,10 +84,10 @@ ARCHIVE_DAYS = 30
 LOG_MAX_BYTES = 10 * 1024 * 1024
 WINDOWS = os.name == "nt"
 # Concrete addresses become file names: no path separators, no shell or Windows-reserved characters.
-ADDRESS_RE = re.compile(r"^(agy|claude|ext)(:[A-Za-z0-9_.-]+)?$")
+ADDRESS_RE = re.compile(r"^(agy|claude|ext|vibe)(:[A-Za-z0-9_.-]+)?$")
 PEER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")  # a machine paired with this one
 # remote:<peer>/<address on that machine>: the message waits in inbox remote:<peer> for the gateway.
-REMOTE_RE = re.compile(r"^remote:([a-z0-9][a-z0-9_-]{0,31})/((?:agy|claude|ext)(?:[:@][^\s/\\]{1,200})?)$")
+REMOTE_RE = re.compile(r"^remote:([a-z0-9][a-z0-9_-]{0,31})/((?:agy|claude|ext|vibe)(?:[:@][^\s/\\]{1,200})?)$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -265,7 +272,7 @@ def _update_peer(address, **fields):
 
 
 def peers(kind=None, days=RECENT_DAYS):
-    """Live peers, optionally only one kind ("agy", "claude" or "ext").
+    """Live peers, optionally only one kind ("agy", "claude", "ext" or "vibe").
 
     A peer is live while its relay or its own process runs. Without a known
     pid, a peer seen by a hook in the last hours still counts, unless its
@@ -275,6 +282,8 @@ def peers(kind=None, days=RECENT_DAYS):
     """
     if kind == "remote":
         return _remote_peers()
+    if kind == "vibe":
+        return _vibe_peers(days)
     if kind in (None, "agy"):
         _auto_relay_scan()
         if days is None or days > RECENT_DAYS:
@@ -284,7 +293,7 @@ def peers(kind=None, days=RECENT_DAYS):
     found = []
     os.makedirs(_path("peers"), exist_ok=True)
     for name in sorted(os.listdir(_path("peers"))):
-        if not name.endswith(".json") or (kind and not name.startswith(kind + "-")):
+        if not name.endswith(".json") or (kind and not name.startswith(kind + "-")) or name.startswith("vibe-"):
             continue
         try:
             with open(_path("peers", name), encoding="utf-8") as f:
@@ -304,7 +313,7 @@ def peers(kind=None, days=RECENT_DAYS):
         peer["asleep"] = bool(peer.get("cli")) and not (peer["relay_alive"] or peer["process_alive"])
         if peer["relay_alive"] or peer["process_alive"] or peer["asleep"] or (fresh and peer["process_alive"] is None):
             found.append(peer)
-    return found + (_remote_peers() if kind is None else [])
+    return found + (_vibe_peers(days) + _remote_peers() if kind is None else [])
 
 
 def _remote_pairs():
@@ -370,11 +379,150 @@ def _agy_title(conversation):
     return None
 
 
+# ---------------------------------------------------------------- vibe
+# Mistral Vibe conversations (docs/VIBE-DESIGN.md). A conversation is every session
+# with one 12-hex suffix; vibe_sessions.py reads them from vibe's save_dir. Its peer
+# file peers/vibe-<suffix>.json has one field per role, each written by that role only:
+# tui_pid and tui_seen (the plugin in a vibe TUI), runner_pid (vibe-run), acp_pid
+# (its vibe-acp), plus the plugin's session, workspace, name, paused, wake, version.
+
+def _load_sibling(module_name, file_name):
+    """A module next to this file, loaded by path under `module_name`, never through
+    sys.path: inside the vibe process, names such as `vibe` are taken."""
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    import importlib.util
+    path = os.path.join(os.path.dirname(SCRIPT), file_name)
+    if not os.path.exists(path):
+        sys.exit(f"{file_name} is missing next to {SCRIPT}: reinstall the bridge")
+    sys.modules.setdefault("agent_bridge_core", sys.modules[__name__])
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[module_name]
+        raise
+    return module
+
+
+def _vibe():
+    return _load_sibling("agent_bridge_vibe_sessions", "vibe_sessions.py")
+
+
+def _vibe_runner():
+    return _load_sibling("agent_bridge_vibe_runner", "vibe_runner.py")
+
+
+def _vibe_acp_bin():
+    """Path of the vibe-acp command, or None. Hooks and MCP servers may run with a short PATH."""
+    import shutil
+    found = shutil.which("vibe-acp")
+    if found:
+        return found
+    for fallback in ("~/.local/bin/vibe-acp", "~/.local/share/uv/tools/mistral-vibe/bin/vibe-acp"):
+        path = os.path.expanduser(fallback)
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def _vibe_tui_alive(peer):
+    return _alive(peer.get("tui_pid")) and time.time() - peer.get("tui_seen", 0) < VIBE_BEAT_SECONDS
+
+
+def _vibe_peers(days=RECENT_DAYS):
+    """vibe conversations saved in the last `days` (None: all), and live ones not saved yet.
+
+    A conversation whose TUI, vibe-run or vibe-acp runs is listed whatever its age.
+    """
+    found = {}
+    with contextlib.suppress(Exception):  # an unreadable vibe setup must not break `list`
+        for c in _vibe().conversations(days).values():
+            found[c["address"]] = dict(c)
+    os.makedirs(_path("peers"), exist_ok=True)
+    for name in sorted(os.listdir(_path("peers"))):
+        if not (name.startswith("vibe-") and name.endswith(".json")) or name == _name(VIBE_NEW) + ".json":
+            continue
+        try:
+            with open(_path("peers", name), encoding="utf-8") as f:
+                peer = json.load(f)
+        except (OSError, ValueError):
+            continue
+        address = peer.get("address")
+        if not (isinstance(address, str) and ADDRESS_RE.match(address) and address.startswith("vibe:")):
+            continue
+        tui, runner, acp = _vibe_tui_alive(peer), _alive(peer.get("runner_pid")), _alive(peer.get("acp_pid"))
+        entry = found.get(address)
+        if entry is None:
+            if not (tui or runner or acp):
+                if days is not None or not peer.get("aliases"):
+                    continue
+            entry = {"address": address, "suffix": address[5:]}
+            with contextlib.suppress(Exception):
+                entry.update(_vibe().conversation(address[5:]) or {})
+        if tui:
+            for key in ("session", "workspace", "name", "paused", "wake", "version"):
+                if peer.get(key) is not None:
+                    entry[key] = peer[key]
+        if peer.get("aliases"):
+            entry["aliases"] = peer["aliases"]
+            if not entry.get("name"):
+                entry["name"] = next((a[5:] for a in peer["aliases"] if a.startswith("vibe:")), None)
+        entry.update(tui_alive=tui, runner_alive=runner, acp_alive=acp, tui_pid=peer.get("tui_pid"),
+                     runner_pid=peer.get("runner_pid"), price_cap=peer.get("price_cap"))
+        found[address] = entry
+    for entry in found.values():
+        entry.setdefault("tui_alive", False)
+        entry.setdefault("runner_alive", False)
+        entry.setdefault("acp_alive", False)
+        entry["relay_alive"] = False
+        entry["process_alive"] = entry["tui_alive"]
+    return sorted(found.values(), key=lambda p: p["address"])
+
+
+def _describe_vibe(peer):
+    if peer["tui_alive"] and peer.get("wake") == "none":
+        how = f"TUI, no injection (vibe {peer.get('version') or '?'}): waits until vibe exits"
+    elif peer["tui_alive"] and peer.get("paused"):
+        how = "TUI, paused (Esc): delivers after Enter"
+    elif peer["tui_alive"]:
+        how = "TUI: wakes on message"
+    elif peer["runner_alive"]:
+        how = "background turn running (vibe-run)"
+    elif _vibe_acp_bin():
+        how = "closed: wakes with vibe-acp"
+    else:
+        how = "closed: waits until reopened (no vibe-acp)"
+    if peer.get("price_cap") is False and not peer["tui_alive"]:
+        how += ", price cap not set, max_turns only"
+    label = peer.get("name") or re.sub(r'[\s"]+', " ", peer.get("title") or "").strip()[:60]
+    name = f"  \"{label}\"" if label else ""
+    return f"{peer['address']}{name}  {peer.get('workspace') or '?'}  {how}"
+
+
+def _wake_vibe(address):
+    """Start vibe-run for `address` if its conversation is closed and has messages: one at a time,
+    never while a vibe TUI serves it."""
+    suffix = address[5:]
+    if not _vibe().SUFFIX_RE.match(suffix) or not _vibe_acp_bin():
+        return
+    with _locked(_path("state", f"vibe-{suffix}")):
+        peer = _read_peer(address) or {}
+        if _vibe_tui_alive(peer) or _alive(peer.get("runner_pid")) or not _pending(address):
+            return
+        pid = _spawn_detached([sys.executable, "-u", SCRIPT, "vibe-run", suffix], f"vibe-{suffix}.log")
+        _update_peer(address, runner_pid=pid)
+
+
 def _agy_peers():
     return peers("agy")
 
 
 def describe(peer):
+    if peer["address"].startswith("vibe:"):
+        return _describe_vibe(peer)
     if peer.get("remote"):
         if peer["address"] == f"remote:{peer['remote']}":
             state = "gateway running" if peer["gateway_alive"] else "gateway stopped: starts on the first send"
@@ -409,8 +557,12 @@ def resolve(to, sender=None):
     if to.startswith("remote:"):
         return _resolve_remote(to)[0]
     kind, sep, rest = to.partition(":") if ":" in to else to.partition("@")
-    if kind not in ("agy", "claude", "ext"):
+    if kind not in ("agy", "claude", "ext", "vibe"):
         sys.exit(f"unknown recipient {to!r}")
+    if to == VIBE_NEW or to.startswith(VIBE_NEW + "@"):
+        if _vibe_acp_bin():
+            return VIBE_NEW
+        sys.exit(f"{VIBE_NEW}: the vibe-acp command is not installed or not on PATH")
     if to == NEW_CLI or to.startswith(NEW_CLI + "@"):
         if _agy_bin():
             return NEW_CLI
@@ -422,16 +574,17 @@ def resolve(to, sender=None):
     candidates = [p for p in peers(kind) if p["address"] != sender]
     if sep == ":":
         # An exact address or title reaches a conversation of any age; a prefix only a listed one.
-        every = [p for p in peers(kind, days=None) if p["address"] != sender] if kind == "agy" else candidates
+        every = ([p for p in peers(kind, days=None) if p["address"] != sender] if kind in ("agy", "vibe")
+                 else candidates)
         exact = [p for p in every if p["address"] == to or to in p.get("aliases", ())]
         named = [p for p in every if p.get("name") == rest]
         candidates = exact or named or [p for p in candidates if p["address"].startswith(to)]
     elif sep == "@":
-        candidates = [p for p in candidates if rest in p.get("workspace", "")]
-    if kind == "agy" and sep != ":":
+        candidates = [p for p in candidates if rest in (p.get("workspace") or "")]
+    if kind in ("agy", "vibe") and sep != ":":
         # `agy` and `agy@<folder>` aim at a session in use, not at every listed conversation:
-        # `agy` counts the active ones only, `agy@` prefers a single active match.
-        active = [p for p in candidates if _active(p)]
+        # `agy` counts the active ones only, `agy@` prefers a single active match. Same for vibe.
+        active = [p for p in candidates if (p["tui_alive"] if kind == "vibe" else _active(p))]
         if not sep or len(active) == 1:
             candidates = active
     if len(candidates) == 1:
@@ -440,7 +593,10 @@ def resolve(to, sender=None):
         return to  # the shared inbox, read with `watch claude`
     if not candidates and sep == ":" and kind == "agy" and UUID_RE.match(rest):
         return to  # full conversation id of an agy session not seen yet
-    listing = "\n".join(f"  {describe(p)}" for p in candidates) or "  (none)"
+    shown = candidates
+    if not candidates and kind == "vibe":
+        shown = [p for p in peers("vibe") if p["address"] != sender]  # what the sender can pick from
+    listing = "\n".join(f"  {describe(p)}" for p in shown) or "  (none)"
     sys.exit(f"{to!r} matches {len(candidates)} live {kind} peers; pick one:\n{listing}")
 
 
@@ -480,8 +636,8 @@ def _default_sender():
 def send(to, body, sender, workspace=None):
     """Write a message to the inbox of `to`. For agy:new, `agy:new@<title>` names the new
     conversation and `workspace`, a directory or a Desktop project name, picks where it works."""
-    if workspace and not any(to == n or to.startswith(n + "@") for n in (NEW, NEW_CLI)):
-        sys.exit("--workspace only applies to agy:new and agy:new-cli")
+    if workspace and not any(to == n or to.startswith(n + "@") for n in (NEW, NEW_CLI, VIBE_NEW)):
+        sys.exit("--workspace only applies to agy:new, agy:new-cli and vibe:new")
     address = resolve(to, sender)
     msg = {"id": uuid.uuid4().hex[:12], "from": sender, "to": address, "ts": _now(), "body": body}
     if address.startswith("remote:"):
@@ -511,6 +667,14 @@ def send(to, body, sender, workspace=None):
         if not os.path.isdir(workspace):
             sys.exit(f"{NEW_CLI}: no such directory {workspace!r}")
         msg["new"] = {k: v for k, v in (("name", name), ("workspace", workspace)) if v}
+    elif address == VIBE_NEW:
+        name = to[len(VIBE_NEW) + 1:].strip()
+        if name and (not ADDRESS_RE.match(f"vibe:{name}") or name == "new" or _vibe().SUFFIX_RE.match(name)):
+            sys.exit(f"{VIBE_NEW}@<name>: letters, digits, '.', '_' and '-' only, and not 12 hex digits")
+        workspace = os.path.abspath(os.path.expanduser(workspace or os.getcwd()))
+        if not os.path.isdir(workspace):
+            sys.exit(f"{VIBE_NEW}: no such directory {workspace!r}")
+        msg["new"] = {k: v for k, v in (("name", name), ("workspace", workspace)) if v}
     name = f"{time.time_ns()}-{msg['id']}.json"
     inbox = _dir("inbox", address)
     tmp = os.path.join(inbox, "." + name + ".tmp")
@@ -528,6 +692,10 @@ def send(to, body, sender, workspace=None):
             _remote().start()
     elif address == NEW_CLI:
         _spawn_detached([sys.executable, "-u", SCRIPT, "cli-new"], "cli-new.log")
+    elif address == VIBE_NEW:
+        _spawn_detached([sys.executable, "-u", SCRIPT, "vibe-new"], "vibe-new.log")
+    elif address.startswith("vibe:"):
+        _wake_vibe(address)
     elif address.startswith("agy:"):
         _wake_cli(address)
     return msg
@@ -1793,6 +1961,10 @@ def main(argv):
         cli_run(args[0])
     elif cmd == "cli-new" and not args:
         cli_new()
+    elif cmd == "vibe-run" and len(args) == 1:
+        _vibe_runner().vibe_run(args[0])
+    elif cmd == "vibe-new" and not args:
+        _vibe_runner().vibe_new()
     elif cmd == "remote":
         _remote().main(args)
     else:
