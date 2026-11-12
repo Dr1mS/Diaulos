@@ -235,7 +235,10 @@ class BridgeVibeTest(VibeSetup):
         runner = self.peer(address).get("runner_pid")
         self.assertIsInstance(runner, int, self.peer(address))
         self.assertTrue(os.path.exists(os.path.join(self.bridge_home, "state", f"vibe-{SUFFIX['renamed']}.log")))
-        # A second message while that vibe-run runs starts no other one.
+        # That vibe-run delivers "first" with the fake vibe-acp, then exits.
+        self.assertTrue(wait_for(lambda: not self.peer(address).get("runner_pid"), 30),
+                        self.state(f"vibe-{SUFFIX['renamed']}.log"))
+        # A second message while a vibe-run runs starts no other one.
         sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         self.addCleanup(sleeper.wait)
         self.addCleanup(sleeper.kill)
@@ -246,7 +249,7 @@ class BridgeVibeTest(VibeSetup):
         self.write_peer(SUFFIX["renamed"], tui_pid=os.getpid(), tui_seen=time.time())
         self.send(address, "third")
         self.assertNotIn("runner_pid", self.peer(address))
-        self.assertEqual(len(self.inbox(address)), 3)
+        self.assertEqual([m["body"] for m in self.inbox(address)], ["second", "third"])
 
     def test_no_vibe_run_without_vibe_acp(self):
         self.without_vibe_acp()
