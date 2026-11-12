@@ -16,6 +16,10 @@ In a vibe TUI, one daemon thread, every POLL_SECONDS:
   - finishes or recovers in-flight records (state/vibe-inflight/<suffix>.json);
   - delivers waiting messages when vibe is idle (five conditions of §4.2), inside
     vibe's own event loop, so the check and the call happen together.
+A TUI whose VibeApp is not found in FIND_APP_SECONDS still writes its heartbeat, with
+wake none (NoAppPlugin), so vibe-run never starts a turn beside it; `vibe -p` and
+vibe-acp have no TUI and get the tools only. bridge_send stops after two failed sends
+to one address in the process (§4.1).
 When AGENT_BRIDGE_VIBE_MAX_PRICE is set (vibe-run and vibe-new set it for their vibe-acp),
 it puts that price cap on vibe's AgentLoop (best effort, private names); with
 AGENT_BRIDGE_VIBE_SUFFIX (vibe-run), it records acp_pid and price_cap in the peer file
@@ -94,19 +98,36 @@ def vibe_version():
 
 # ---------------------------------------------------------------- tools (called by the shim)
 
+MAX_FAILURES = 2
+_failures = {}  # recipient -> failed bridge_send calls in this process (§4.1, third guard)
+_failures_lock = threading.Lock()
+
+
 def send(to, text, session_id=None):
-    """bridge_send: returns the text the model sees."""
+    """bridge_send: returns the text the model sees. After MAX_FAILURES failed sends to the
+    same recipient in this process, it stops without sending: a model that retries an
+    address nobody reads loops until the price cap (§4.1, "A sender nobody reads")."""
     sender = sessions().address_of(session_id) or os.environ.get("AGENT_BRIDGE_ADDRESS")
     if not sender or not sender.startswith("vibe:"):
         return "error: this vibe session has no bridge address yet (no session id)"
+    with _failures_lock:
+        if _failures.get(to, 0) >= MAX_FAILURES:
+            return f"stopped: {to} failed twice, do not call bridge_send for it again"
     try:
         msg = core().send(to, text, sender)
     except SystemExit as e:
+        _failed(to)
         return f"error: {e}"
     except Exception as e:  # e.g. a locked file: answer, never break the turn
+        _failed(to)
         log(f"bridge_send failed: {e!r}")
         return f"error: send failed: {e!r}"
     return f"sent {msg['id']} from {sender} to {msg['to']}"
+
+
+def _failed(to):
+    with _failures_lock:
+        _failures[to] = _failures.get(to, 0) + 1
 
 
 def list_agents(all=False, days=None, session_id=None):
@@ -197,7 +218,10 @@ class TuiPlugin:
         old, self.suffix = self.address, suffix
         self.address = f"vibe:{suffix}" if suffix else None
         if self.address:
-            os.environ["AGENT_BRIDGE_ADDRESS"] = self.address  # `bridge.py send` from vibe's bash tool
+            # `bridge.py send` from vibe's bash tool: _default_sender reads ANTIGRAVITY_CONVERSATION_ID
+            # first, which a vibe started from an agy shell inherits (§3).
+            os.environ.pop("ANTIGRAVITY_CONVERSATION_ID", None)
+            os.environ["AGENT_BRIDGE_ADDRESS"] = self.address
         if old:
             self.release(old)
         self.last_beat = 0.0
@@ -361,6 +385,42 @@ class TuiPlugin:
             self.release(self.address)
 
 
+class NoAppPlugin(TuiPlugin):
+    """A TUI whose VibeApp was not found (vibe slower than FIND_APP_SECONDS, or a new
+    run_textual_ui). No delivery, but the heartbeat still says tui_pid and wake none, so
+    vibe-run never starts a turn beside a live TUI (§4.5). The session comes from vibe's
+    AgentLoop, an argument of run_textual_ui (app.py:4537), found in the stacks or with gc."""
+
+    def __init__(self, loop=None):
+        self.app = _Holder(loop)
+        self.address = None
+        self.suffix = None
+        self.last_beat = 0.0
+        self.missing = ["VibeApp"]
+        self.wake = "none"
+        self.warned_runner = False
+        log(f"vibe {vibe_version()}: TUI without a VibeApp found: wake none, messages wait for vibe-run")
+
+    def tick(self, now=None):
+        """One poll. Never raises."""
+        try:
+            if getattr(self.app.agent_loop, "session_id", None) is None:
+                self.app.agent_loop = find_loop()
+            self.follow()
+            if not self.address:
+                return "no-session"
+            self.beat(now)
+            return "no-app"
+        except Exception as e:
+            log(f"tick failed: {e!r}\n{traceback.format_exc()}")
+            return "error"
+
+
+class _Holder:
+    def __init__(self, loop):
+        self.agent_loop = loop
+
+
 # ---------------------------------------------------------------- the vibe-acp side
 
 def agent_loop_classes():
@@ -481,17 +541,43 @@ def _is_app(o):
     return type(o).__name__ == "VibeApp" and hasattr(o, "agent_loop")
 
 
+def _in_stacks(test):
+    for frame in list(sys._current_frames().values()):
+        while frame is not None:
+            for value in list(frame.f_locals.values()):
+                if test(value):
+                    return value
+            frame = frame.f_back
+    return None
+
+
+def _is_loop(o):
+    return type(o).__name__ == "AgentLoop" and type(o).__module__.startswith("vibe.")
+
+
+def find_loop():
+    """vibe's AgentLoop of this TUI, or None: in the stacks first (gc.freeze hides it from gc)."""
+    loop = _in_stacks(_is_loop)
+    if loop is None:
+        loops = agent_loops()
+        loop = loops[0] if loops else None
+    return loop
+
+
+def prompt_mode(argv=None):
+    """True for `vibe -p` / `--prompt`: no TUI in this process. Only vibe's own command line
+    counts (another program, e.g. `unittest discover -p`, has a -p of its own)."""
+    argv = sys.argv if argv is None else argv
+    if not argv or not os.path.basename(argv[0]).lower().startswith("vibe"):
+        return False
+    return any(a in ("-p", "--prompt") or a.startswith("--prompt=") for a in argv[1:])
+
+
 def _app_in_stacks():
     """VibeApp from the locals of a running frame: run_textual_ui() keeps it in `app` while
     the TUI runs (app.py:4549). gc cannot be used alone: VibeApp.on_mount calls gc.freeze()
     (app.py:833), and gc.get_objects() leaves frozen objects out."""
-    for frame in list(sys._current_frames().values()):
-        while frame is not None:
-            for value in list(frame.f_locals.values()):
-                if _is_app(value):
-                    return value
-            frame = frame.f_back
-    return None
+    return _in_stacks(_is_app)
 
 
 def find_app(timeout=FIND_APP_SECONDS):
@@ -513,6 +599,18 @@ def _run_acp(plugin):
     """vibe-acp started by vibe-run or vibe-new: watch for new AgentLoops (session/new, fork)."""
     while not _stop.wait(PRICE_WATCH_SECONDS):
         plugin.apply()
+
+
+def _run_no_app(acp=None):
+    plugin = NoAppPlugin()
+    atexit.register(plugin.close)
+    while not _stop.is_set():
+        if acp is not None:
+            with contextlib.suppress(Exception):
+                acp.apply()
+        plugin.tick()
+        _stop.wait(POLL_SECONDS)
+    plugin.close()
 
 
 def _run_tui(app, acp=None):
@@ -537,9 +635,12 @@ def _run(acp=None):
             _run_acp(acp)  # vibe-acp of vibe-run: never a TUI
             return
         in_acp = os.path.basename(sys.argv[0] if sys.argv else "").startswith("vibe-acp")
-        app = None if in_acp else find_app()
+        no_tui = in_acp or prompt_mode()
+        app = None if no_tui else find_app()
         if app is not None:
             _run_tui(app, acp)
+        elif not no_tui and not _stop.is_set():
+            _run_no_app(acp)
         else:
             log(f"vibe {vibe_version()}: no VibeApp (vibe -p or vibe-acp): tools only")
             if acp is not None:

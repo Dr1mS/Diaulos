@@ -614,6 +614,10 @@ def resolve(to, sender=None):
         return to  # the shared inbox, read with `watch claude`
     if not candidates and sep == ":" and kind == "agy" and UUID_RE.match(rest):
         return to  # full conversation id of an agy session not seen yet
+    if not candidates and kind == "ext" and sep == ":":
+        # §4.1, second guard: an agent that retries a dead `ext:` loops; say it plainly.
+        sys.exit(f"{to} has no reader (no program watches it): the message was not delivered. "
+                 "Do not send it again.")
     shown = candidates
     if not candidates and kind == "vibe":
         shown = [p for p in peers("vibe") if p["address"] != sender]  # what the sender can pick from

@@ -50,6 +50,14 @@ class MailboxTest(BridgeTest):
             self.assertTrue(wait_for(lambda: "ext:bot" not in self.listing(), 10), "ext:bot still listed")
             self.assertNotEqual(self.send("ext:bot", "late", check=False).returncode, 0)
 
+    def test_a_dead_ext_says_not_delivered_and_not_to_retry(self):
+        # VIBE-DESIGN §4.1, second guard: an agent that retries a dead ext: loops.
+        proc = self.send("ext:gone", "hello", "claude", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("ext:gone has no reader (no program watches it): the message was not delivered. "
+                      "Do not send it again.", proc.stderr)
+        self.assertNotIn("ext:gone", self.listing())
+
     def test_an_agent_cannot_message_itself(self):
         self.popen("watch", "ext:self")
         self.assertTrue(wait_for(lambda: "ext:self" in self.listing(), 10))

@@ -388,6 +388,24 @@ class NeverLostTest(RunnerSetup):
                          "header\nblock\nIf bridge_send answers with an error, do not call it again: say so "
                          f"in your answer.\nReply with the bridge_send tool, to=claude  (you are {ADDRESS})")
 
+    def test_an_ext_sender_without_reader_gets_no_reply_line(self):
+        # VIBE-DESIGN §4.1, first guard.
+        bridge = self.load_bridge()
+        runner = bridge._vibe_runner()
+        self.addCleanup(sys.modules.pop, "agent_bridge_vibe_runner", None)
+        self.addCleanup(sys.modules.pop, "agent_bridge_core", None)
+        sys.modules["agent_bridge_core"] = bridge
+        bridge._update_peer("ext:live", pid=os.getpid(), workspace=self.tmp, gone=False)
+        msg = lambda sender: {"id": "1", "from": sender, "ts": "t", "body": "b"}
+        dead = runner.incoming_text([msg("ext:dead")], ADDRESS)
+        self.assertTrue(dead.endswith("\next:dead has no reader: do not reply with bridge_send"), dead)
+        self.assertNotIn("Reply with the bridge_send tool", dead)
+        live = runner.incoming_text([msg("ext:live")], ADDRESS)
+        self.assertTrue(live.endswith(f"Reply with the bridge_send tool, to=ext:live  (you are {ADDRESS})"), live)
+        both = runner.incoming_text([msg("ext:dead"), msg("claude")], ADDRESS)
+        self.assertIn("\next:dead has no reader: do not reply with bridge_send\n", both)
+        self.assertTrue(both.endswith(f"Reply with the bridge_send tool, to=claude  (you are {ADDRESS})"), both)
+
 
 @unittest.skipUnless(os.environ.get("DIAULOS_REAL_VIBE") == "1" and shutil.which("vibe-acp"),
                      "paid calls to the real vibe-acp: set DIAULOS_REAL_VIBE=1")

@@ -7,9 +7,18 @@ moved there; `sleep` and `python3` added to the bash allowlist of the copy, so n
 approval is typed; update checks off (their prompt blocks a
 second start), active_model set to devstral-small, the cheapest model of the
 config), the shim install/vibe-tool.py in its tools/. The real HOME is kept
-for vibe's API key. AGENT_BRIDGE_VIBE_MAX_PRICE caps each turn (default 0.50 $).
+for vibe's API key.
 
-Usage: python3 tests/real_vibe_tui.py [--price 0.5] [--keep]
+Price: --price is the budget of the whole run (default 0.10 $, at most 0.50 $).
+AGENT_BRIDGE_VIBE_MAX_PRICE puts vibe's own cap on each vibe process, and vibe counts
+the cost of the session in that process, not of a turn; `vibe --resume` (step 3) starts
+a new process whose count starts again at zero. So each process gets as cap what is
+left of the budget, the script adds up the cost of every process (meta.json
+stats.session_cost; the last value of the killed process is kept and added to what the
+folders say afterwards, so the total may count high, never low), and stops with FAIL as
+soon as the total is above the budget.
+
+Usage: python3 tests/real_vibe_tui.py [--price 0.1] [--keep]
 
 Steps, each printed with its measures:
   1. idle delivery, 3 passes: time from `bridge.py send` to the call of
@@ -145,6 +154,8 @@ class Run:
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_BRIDGE_")}
         self.env.update(VIBE_HOME=self.vibe_home, AGENT_BRIDGE_HOME=self.bridge_home,
                         AGENT_BRIDGE_VIBE_MAX_PRICE=str(price))
+        self.budget = price
+        self.banked = 0.0  # cost of the vibe processes that are gone (killed in step 3)
         self.tui = None
         self.suffix = None
         self.results = {}
@@ -218,7 +229,18 @@ class Run:
         except OSError:
             return 0.0
 
+    def spent(self):
+        return self.banked + sum(c or 0 for _, c in self.costs())
+
+    def check_budget(self, where):
+        spent = self.spent()
+        if spent > self.budget:
+            raise RuntimeError(f"run total ${spent:.4f} is above the budget ${self.budget} ({where}): stopped")
+        return spent
+
     def start_tui(self, *extra):
+        left = self.budget - self.check_budget("before starting vibe")
+        self.env["AGENT_BRIDGE_VIBE_MAX_PRICE"] = f"{max(left, 0.001):.4f}"
         self.tui = Tui(self.tmp, self.env, ["--trust", "--workdir", self.work, *extra])
         pid = self.tui.pid
         peer_file = lambda: [n for n in os.listdir(os.path.join(self.bridge_home, "peers"))
@@ -309,6 +331,8 @@ class Run:
         time.sleep(4)
         session = self.peer().get("session")
         self.tui.kill()
+        time.sleep(1)
+        self.banked += sum(c or 0 for _, c in self.costs())  # a new process counts from zero again
         print(f"3. killed vibe pid {old_pid} during the turn of {msg}", flush=True)
         new_pid = self.start_tui("--resume", session)
         if not wait_for(lambda: self.started_record(new_pid), 60):
@@ -355,23 +379,24 @@ class Run:
     def costs(self):
         found = []
         for d in self.folders():
-            with open(os.path.join(self.save_dir, d, "meta.json")) as f:
-                m = json.load(f)
+            try:
+                with open(os.path.join(self.save_dir, d, "meta.json")) as f:
+                    m = json.load(f)
+            except (OSError, ValueError):
+                continue  # not written yet
             found.append((d, (m.get("stats") or {}).get("session_cost")))
         return found
 
     def run(self):
         try:
             print(f"vibe {subprocess.run([VIBE, '--version'], capture_output=True, text=True).stdout.strip()}, "
-                  f"price cap {self.env['AGENT_BRIDGE_VIBE_MAX_PRICE']} $", flush=True)
+                  f"budget of the run {self.budget} $", flush=True)
             self.start_tui()
             print(f"TUI up: vibe:{self.suffix}, heartbeat {json.dumps({k: self.peer().get(k) for k in ('wake', 'version', 'paused')})}",
                   flush=True)
-            self.step_idle()
-            self.step_busy()
-            self.step_kill()
-            self.step_send()
-            self.step_keys()
+            for step in (self.step_idle, self.step_busy, self.step_kill, self.step_send, self.step_keys):
+                step()
+                self.check_budget(f"after {step.__name__}")
             print("PASS", flush=True)
             return 0
         except (AssertionError, RuntimeError) as e:
@@ -381,7 +406,8 @@ class Run:
             if self.tui:
                 self.tui.stop()
             costs = self.costs()
-            print(f"cost per session folder: {costs}; total ${sum(c or 0 for _, c in costs):.4f}", flush=True)
+            print(f"cost per session folder: {costs}; killed processes ${self.banked:.4f}; "
+                  f"run total ${self.spent():.4f} (budget ${self.budget})", flush=True)
             cap_lines = [line.split(" ", 4)[-1] for line in self.log().splitlines() if "price cap" in line]
             print(f"plugin price-cap lines: {cap_lines}", flush=True)
             if self.keep:
@@ -392,11 +418,11 @@ class Run:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--price", type=float, default=0.5)
+    ap.add_argument("--price", type=float, default=0.1, help="budget of the whole run, in $")
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
     if a.price > 0.5:
-        sys.exit("the price cap of a run is at most 0.50 $")
+        sys.exit("the budget of a run is at most 0.50 $")
     sys.exit(Run(a.price, a.keep).run())
 
 

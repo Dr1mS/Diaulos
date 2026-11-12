@@ -86,11 +86,26 @@ def incoming_text(msgs, me):
         text = text[:end]
     text = text.replace("@", "@" + WORD_JOINER)
     senders = sorted({m["from"] for m in msgs})
-    to = senders[0] if len(senders) == 1 else "<the from of the message>"
     # A failed send must not loop: a first real TUI run retried 16 times (0.52 $) on an `ext:` sender
-    # with no reader.
-    return (text + "\nIf bridge_send answers with an error, do not call it again: say so in your answer."
-            + f"\nReply with the bridge_send tool, to={to}  (you are {me})")
+    # with no reader (§4.1, "A sender nobody reads", first guard).
+    unread = [a for a in senders if _no_reader(a)]
+    readable = [a for a in senders if a not in unread]
+    lines = [f"{a} has no reader: do not reply with bridge_send" for a in unread]
+    if readable:
+        to = readable[0] if len(readable) == 1 else "<the from of the message>"
+        lines.append(f"Reply with the bridge_send tool, to={to}  (you are {me})")
+    return (text + "\nIf bridge_send answers with an error, do not call it again: say so in your answer.\n"
+            + "\n".join(lines))
+
+
+def _no_reader(address):
+    """True for an `ext:` sender that no program watches now."""
+    if not address.startswith("ext:"):
+        return False
+    try:
+        return address not in {p["address"] for p in _core().peers("ext")}
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------- in-flight records

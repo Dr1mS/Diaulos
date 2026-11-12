@@ -297,9 +297,31 @@ class TuiTest(TuiSetup):
         self.assertTrue(self.plugin.send("bad address", "x", session_id=sid).startswith("error"))
 
     def test_bridge_py_send_from_vibe_bash_has_the_same_from(self):
-        env = dict(self.env, AGENT_BRIDGE_ADDRESS=os.environ["AGENT_BRIDGE_ADDRESS"])
-        self.bridge("send", "claude", "from bash", env=env)
-        self.assertEqual([m["from"] for m in self.inbox("claude")], [self.address])
+        # A vibe started from an agy shell inherits ANTIGRAVITY_CONVERSATION_ID, which bridge.py
+        # reads first (§3): the plugin drops it. vibe's bash tool gets the process env as it is.
+        self.addCleanup(_restore_env, "ANTIGRAVITY_CONVERSATION_ID", os.environ.get("ANTIGRAVITY_CONVERSATION_ID"))
+        os.environ["ANTIGRAVITY_CONVERSATION_ID"] = "11111111-2222-3333-4444-555555555555"
+        app = self.make_app()
+        tui = self.plugin.TuiPlugin(app)
+        self.addCleanup(tui.close)
+        tui.tick()
+        self.assertNotIn("ANTIGRAVITY_CONVERSATION_ID", os.environ)
+        self.bridge("send", "claude", "from bash", env=dict(os.environ))
+        self.assertEqual([m["from"] for m in self.inbox("claude")], [tui.address])
+
+    def test_bridge_send_stops_after_two_failures_to_one_address(self):
+        # VIBE-DESIGN §4.1, third guard: no third send to an address that failed twice.
+        sid = self.app.agent_loop.session_id
+        calls = []
+        original = self.core.send
+        self.addCleanup(setattr, self.core, "send", original)
+        self.core.send = lambda *a, **k: (calls.append(a[0]), original(*a, **k))[1]
+        for _ in range(2):
+            self.assertIn("has no reader", self.plugin.send("ext:dead", "x", session_id=sid))
+        answer = self.plugin.send("ext:dead", "x", session_id=sid)
+        self.assertEqual(answer, "stopped: ext:dead failed twice, do not call bridge_send for it again")
+        self.assertEqual(calls, ["ext:dead", "ext:dead"])
+        self.assertTrue(self.plugin.send("claude", "still fine", session_id=sid).startswith("sent "))
 
 
 class MissingNameTest(PluginSetup):
@@ -361,11 +383,52 @@ class ThreadTest(PluginSetup):
         run_textual_ui()
         self.assertIs(found[0], app)
 
-    def test_no_app_means_tools_only(self):
-        self.plugin.FIND_APP_SECONDS = 0.3
-        self.plugin.find_app.__defaults__ = (0.3,)
+    def test_vibe_p_means_tools_only(self):
+        self.addCleanup(setattr, sys, "argv", sys.argv)
+        sys.argv = ["vibe", "-p", "hello"]
         self.plugin.start()
         self.assertTrue(wait_for(lambda: "tools only" in self.log_text(), 5), self.log_text())
+        self.assertTrue(self.plugin.prompt_mode(["vibe", "--prompt=x"]))
+        self.assertFalse(self.plugin.prompt_mode(["vibe", "--resume", "s"]))
+        self.assertTrue(self.plugin.prompt_mode(["/opt/uv/bin/vibe", "-p", "x"]))
+        self.assertFalse(self.plugin.prompt_mode(["python -m unittest", "discover", "-p", "test_*.py"]))
+
+    def test_a_tui_whose_app_is_not_found_beats_wake_none(self):
+        # Review T3c point 15: without a heartbeat, vibe-run would start a turn beside the live TUI.
+        self.addCleanup(setattr, sys, "argv", sys.argv)
+        sys.argv = ["vibe"]
+        sid = vibe_app._new_id()
+        loop = types.SimpleNamespace(session_id=sid, session_logger=None)
+        self.plugin.FIND_APP_SECONDS = 0.3
+        self.plugin.find_app.__defaults__ = (0.3,)
+        self.plugin.find_loop = lambda: loop
+        self.plugin.start()
+        address = "vibe:" + sid.rsplit("-", 1)[1]
+        self.assertTrue(wait_for(lambda: self.peer(address).get("tui_pid") == os.getpid(), 5), self.log_text())
+        self.assertEqual(self.peer(address)["wake"], "none")
+        self.assertIn("TUI without a VibeApp found: wake none", self.log_text())
+        self.core.send(address, "wait for vibe-run", "claude:t")
+        time.sleep(1.5)
+        self.assertEqual(len(self.core._pending(address)), 1, "a message was claimed without an app")
+        self.assertIn("TUI, no injection", self.listing())
+        self.plugin.stop()
+        self.assertIsNone(self.peer(address).get("tui_pid"), "stop did not release the address")
+
+    def test_the_agent_loop_is_found_in_the_stacks(self):
+        import gc
+        import threading
+        loop = fake_loop_module()()
+        gc.collect()
+        gc.freeze()
+        self.addCleanup(gc.unfreeze)
+        found = []
+        holder = threading.Thread(target=lambda: found.append(self.plugin.find_loop()))
+
+        def run_textual_ui(agent_loop=loop):  # vibe's run_textual_ui(agent_loop, ...), app.py:4537
+            holder.start()
+            holder.join()
+        run_textual_ui()
+        self.assertIs(found[0], loop)
 
 
 def fake_loop_module(with_names=True):
