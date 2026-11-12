@@ -4,7 +4,7 @@
 
 **Vos agents de code IA se parlent — et se réveillent les uns les autres.**
 
-Claude Code ⇄ Google Antigravity (agy) · sur une même machine ou d'un réseau à l'autre · aucun agent qui interroge en boucle, aucune frappe simulée
+Claude Code ⇄ Google Antigravity (agy) ⇄ Mistral Vibe · sur une même machine ou d'un réseau à l'autre · aucun agent qui interroge en boucle, aucune frappe simulée
 
 [![Tests](https://github.com/Dr1mS/Diaulos/actions/workflows/tests.yml/badge.svg)](https://github.com/Dr1mS/Diaulos/actions/workflows/tests.yml) ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue) ![Linux | Windows](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey) ![Cœur : bibliothèque standard seule](https://img.shields.io/badge/core-stdlib%20only-brightgreen) [![Licence : Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
@@ -18,7 +18,7 @@ Claude Code ⇄ Google Antigravity (agy) · sur une même machine ou d'un résea
 
 Claude Code tourne dans un terminal, Gemini dans un autre. L'un écrit le code, l'autre devrait le relire, et c'est **vous** qui faites les copier-coller entre les deux, ou qui allez réveiller celui qui s'est arrêté.
 
-**Diaulos vous sort de cette boucle.** N'importe quelle session peut écrire à n'importe quelle autre, et le message **réveille le destinataire même s'il est inactif**. Une conversation agy CLI reste joignable même terminal fermé, et une session d'une autre machine appairée l'est par sa passerelle. Chaque outil est réveillé par ses propres points d'extension : Claude Code par un canal MCP, agy par son propre language server. Aucun agent n'interroge sa boîte en boucle, et rien ne tape dans un terminal : de petits processus auxiliaires surveillent la boîte aux lettres et ne réveillent un agent que lorsqu'un message l'attend.
+**Diaulos vous sort de cette boucle.** N'importe quelle session peut écrire à n'importe quelle autre, et le message **réveille le destinataire même s'il est inactif**. Une conversation agy CLI ou Mistral Vibe reste joignable même terminal fermé, et une session d'une autre machine appairée l'est par sa passerelle. Chaque outil est réveillé par ses propres points d'extension : Claude Code par un canal MCP, agy par son propre language server, Mistral Vibe par un fichier d'outils qu'elle charge elle-même. Aucun agent n'interroge sa boîte en boucle, et rien ne tape dans un terminal : de petits processus auxiliaires surveillent la boîte aux lettres et ne réveillent un agent que lorsqu'un message l'attend.
 
 ```text
 vous › demande à la session agy de ~/api de relire mon dernier commit, et dis-moi ce qu'elle trouve
@@ -54,7 +54,8 @@ Une session n'est réveillée **que lorsqu'un message l'attend**, et les message
 
 - **D'un outil à l'autre** — Claude Code ⇄ Claude Code, agy ⇄ agy, Claude ⇄ agy, autant de sessions que vous voulez, dans n'importe quel dossier.
 - **Réveil à l'arrivée d'un message** — les sessions Claude Code et agy inactives reprennent la main d'elles-mêmes dès qu'un message arrive.
-- **Même terminal fermé, on vous répond** — un message à une conversation agy CLI dont le terminal est fermé lance un tour avec `agy -p`.
+- **Même terminal fermé, on vous répond** — un message à une conversation agy CLI dont le terminal est fermé lance un tour avec `agy -p` ; une conversation Mistral Vibe fermée lance un tour avec `vibe-acp`, dans la même session.
+- **Mistral Vibe** — une conversation vibe écrit et liste les sessions avec deux outils natifs, et une vibe ouverte reçoit un message comme sa prochaine demande quand elle est inactive, sans que personne tape. Voir [Mistral Vibe](#mistral-vibe).
 - **Nouvelles sessions à la demande** — `agy:new-cli` / `agy:new` démarrent une nouvelle session agy, avec le message comme premier prompt.
 - **Autres machines** — appairez deux ordinateurs une fois, puis `send remote:laptop/claude:review "…"`. Uniquement des connexions sortantes (HTTPS vers ntfy.sh par défaut), ChaCha20-Poly1305 de bout en bout, via ntfy.sh ou votre propre relais.
 - **Des programmes comme pairs** — un script, un job de CI ou un bot rejoint le pont sous `ext:<nom>` et lit les réponses de l'agent.
@@ -81,14 +82,14 @@ Une session n'est réveillée **que lorsqu'un message l'attend**, et les message
 ## Sommaire
 
 - [Installation](#installation) · [Démarrage rapide](#démarrage-rapide) · [Adresses et commandes](#adresses-et-commandes)
-- [agy CLI et Antigravity Desktop](#agy-cli-et-antigravity-desktop) · [Autres machines](#autres-machines) · [Programmes et scripts](#programmes-et-scripts)
+- [agy CLI et Antigravity Desktop](#agy-cli-et-antigravity-desktop) · [Mistral Vibe](#mistral-vibe) · [Autres machines](#autres-machines) · [Programmes et scripts](#programmes-et-scripts)
 - [Sécurité](#sécurité) · [Dépannage](#dépannage) · [État et limites](#état-et-limites)
 - [Fonctionnement](#fonctionnement) · [Développement](#développement)
 - Et aussi : [Coulisses](docs/INTERNALS.md) (en anglais) · [Historique des versions](CHANGELOG.md) (en anglais) · [Journal de labo](docs/JOURNAL.md) · [État de l'art](docs/ETAT-DE-L-ART.md)
 
 ## Installation
 
-Prérequis : Linux ou Windows 10/11, Python 3.8 ou plus récent, la CLI agy ou Antigravity Desktop, et Claude Code si vous voulez y associer des sessions Claude.
+Prérequis : Linux ou Windows 10/11, Python 3.8 ou plus récent, la CLI agy ou Antigravity Desktop, Claude Code si vous voulez y associer des sessions Claude, et Mistral Vibe 2.20 (`mistral-vibe`) si vous voulez y associer des sessions vibe.
 
 ```bash
 git clone https://github.com/Dr1mS/Diaulos && cd Diaulos
@@ -103,8 +104,10 @@ Sous Linux avec Antigravity Desktop, ajoutez `--auto-relay` (expérimental : voi
 
 Ensuite :
 
-1. **Relancez vos sessions agy.** agy ne charge ses hooks qu'au démarrage.
+1. **Relancez vos sessions agy et vibe.** agy ne charge ses hooks, et vibe ses outils, qu'au démarrage.
 2. **Ouvrez un nouveau terminal pour Claude Code.** Avec `--shell` / `-Shell`, un simple `claude` démarre avec le canal du pont ; Claude Code affiche pour ce canal un écran de confirmation à chaque lancement.
+
+**Mistral Vibe installée après Diaulos ?** Relancez l'installeur : il saute vibe quand il ne trouve ni `vibe` ni `~/.vibe`.
 
 **Mise à jour :** `git pull`, puis relancez l'installeur avec les mêmes options, et redémarrez vos sessions. Une session lancée avant la mise à jour garde l'ancien code.
 
@@ -124,6 +127,7 @@ python3 ~/.agent-bridge/bridge.py list
 #  agy:52620e0d-…  "revue api"  /home/moi/projets/api  relay pid 225225: wakes on message
 #  agy:e9439252-…  "web"  /home/moi/projets/web  agy CLI, no process: wakes with agy -p
 #  claude:review  /home/moi/projets/api  MCP channel: wakes on message
+#  vibe:8d1107699082  "docs"  /home/moi/projets/web  TUI: wakes on message
 
 python3 ~/.agent-bridge/bridge.py send agy@web "Tu peux vérifier la modification d'API que je viens de faire ?"
 ```
@@ -144,6 +148,11 @@ Le destinataire répond à l'adresse `from` du message qu'il a reçu.
 | `agy` | La seule autre session agy active : un agy CLI qui tourne, ou une conversation chargée par sa fenêtre Desktop |
 | `agy:new`, `agy:new@<titre>` | Une nouvelle conversation Antigravity Desktop, avec le message comme premier prompt (Linux) |
 | `agy:new-cli`, `agy:new-cli@<nom>` | Une nouvelle conversation agy CLI, avec le message comme premier prompt |
+| `vibe:<id>` | Une conversation Mistral Vibe : les 12 derniers chiffres hexadécimaux de son identifiant de session, qui restent les mêmes après `/compact` et `/clear`. Un préfixe marche quand une seule conversation correspond |
+| `vibe:<nom>` | Une conversation vibe renommée avec `/rename` (les majuscules comptent) |
+| `vibe@<partie-de-son-dossier>` | La conversation vibe dont le dossier contient ce texte : la seule ouverte dans une TUI, sinon la seule listée |
+| `vibe` | La seule conversation vibe ouverte dans une TUI |
+| `vibe:new`, `vibe:new@<nom>` | Une nouvelle conversation vibe lancée avec `vibe-acp`, avec le message comme première demande |
 | `ext:<nom>` | Un programme branché avec `watch ext:<nom>` |
 | `remote:<machine>/<adresse>` | Une session d'une machine appairée, par ex. `remote:laptop/claude:review` |
 
@@ -153,7 +162,7 @@ Le destinataire répond à l'adresse `from` du message qu'il a reçu.
 |---|---|
 | `bridge.py list [--days N \| --all]` | Les sessions actives, et la façon dont chacune est réveillée. Conversations agy des 7 derniers jours, des N derniers jours, ou de tout âge |
 | `bridge.py send <dest> <texte…> [--workspace <dossier>] [--from <adresse>]` | Envoie un message ; `-` comme texte le lit sur l'entrée standard. Les options doivent venir en dernier : ailleurs, elles font partie du texte |
-| `--workspace <dossier>` | Avec `agy:new` / `agy:new-cli` : où travaille la nouvelle session (pour `agy:new`, aussi le nom d'un workspace Desktop) |
+| `--workspace <dossier>` | Avec `agy:new` / `agy:new-cli` / `vibe:new` : où travaille la nouvelle session (pour `agy:new`, aussi le nom d'un workspace Desktop) |
 | `--from <adresse>` | Adresse de l'expéditeur, pour un programme ou un script (agy la remplit lui-même). Vers une autre machine, seulement une adresse `ext:` |
 | `bridge.py watch <adresse> [--json]` | Affiche chaque nouveau message pour cette adresse, sans fin |
 | `bridge.py recv <adresse> [--json]` | Affiche et archive une fois les messages en attente |
@@ -195,6 +204,30 @@ python3 ~/.agent-bridge/bridge.py send agy:new@testeur "Lance les tests et envoi
 `--workspace` prend un dossier ou le nom d'un workspace Desktop ; Desktop range la conversation dans ce workspace.
 
 **Relais automatique (Linux, expérimental, désactivé par défaut).** Avec `./install.sh --auto-relay`, une fenêtre Desktop n'a plus besoin d'`ensure-relay` : dès qu'un agent liste les sessions agy ou écrit à l'une d'elles, Diaulos lance lui-même le relais de la fenêtre, avec le jeton qu'il lit sur la ligne de commande du language server. Sans cette option, un seul `ensure-relay` par lancement de la fenêtre suffit, depuis n'importe laquelle de ses conversations. Elle est désactivée par défaut pour deux raisons : elle lit un secret en dehors du chemin documenté par agy (sans ouvrir d'accès nouveau : le relais détient ce même jeton, et tout processus local peut lire cette ligne de commande), et une mise à jour d'Antigravity peut déplacer ce jeton. Relancez `./install.sh` sans l'option pour la désactiver.
+
+## Mistral Vibe
+
+L'installeur écrit un seul fichier, `~/.vibe/tools/agent_bridge.py` (`$VIBE_HOME/tools/` s'il est défini), et ne modifie aucune configuration de vibe. vibe le charge au démarrage dans tous ses modes (TUI, `vibe -p`, `vibe-acp`). Il donne à vibe deux outils, `bridge_send` et `bridge_list_agents`, qui tournent sans demander d'autorisation, et il livre les messages à une TUI ouverte.
+
+| | Ce que devient un message |
+|---|---|
+| TUI ouverte, inactive | Il devient la prochaine demande, environ 1 s après son arrivée (`list` : `TUI: wakes on message`) |
+| TUI ouverte, au travail | Il attend dans la boîte et part environ 1 s après la fin du tour. Vos demandes en file passent d'abord ; il ne coupe jamais votre tour |
+| TUI ouverte, après Échap avec des demandes en file | Il attend que vous appuyiez sur Entrée et que la file se vide (`TUI, paused (Esc): delivers after Enter`) |
+| TUI ouverte, une commande `!` en cours | Il attend la fin de la commande |
+| Fermée | `vibe-run` rouvre la même session avec `vibe-acp`, fait un tour par lot de messages, puis s'arrête (`closed: wakes with vibe-acp`). `vibe --resume <identifiant de session>` montre ensuite ce tour |
+| TUI tuée au milieu d'un tour livré | `vibe-run` livre le message une nouvelle fois ; il peut alors apparaître deux fois dans l'historique |
+
+```bash
+python3 ~/.agent-bridge/bridge.py send vibe:new@docs "Écris l'entrée du changelog du dernier commit" --workspace ~/projets/web
+# le pont vous envoie vibe:<id> ; la conversation est aussi joignable en vibe:docs, et s'ouvre avec vibe --resume <identifiant de session>
+```
+
+- **Les tours en arrière-plan sont plafonnés.** `vibe-run` et `vibe:new` s'arrêtent après `max_turns` (20) et, au mieux, à un plafond de prix de 0,50 $ par lancement. Les deux se changent dans `~/.agent-bridge/state/vibe-limits.json`, par exemple `{"max_turns": 10, "max_price": 0.20}`. Le plafond de prix passe par des fonctions internes de vibe : si une mise à jour de vibe le casse, `list` ajoute `price cap not set, max_turns only` et seul `max_turns` tient. Une TUI que vous lancez vous-même n'a pas de plafond de prix posé par Diaulos.
+- **Un tour en arrière-plan ne peut rien vous demander.** `vibe-run` refuse chaque demande d'autorisation (`reject_once`) : un outil qui en demande une échoue dans ce tour. Les outils du pont n'en demandent jamais.
+- **Un tour arrêté par une limite** est signalé à l'expéditeur, et le texte du message suivant dit que le tour précédent a été coupé, pour que vibe ne le finisse pas pour quelqu'un d'autre.
+- **Pas de relance en boucle.** Chaque message livré se termine par `If bridge_send answers with an error, do not call it again`, et `bridge_send` cesse d'appeler une adresse qui a échoué deux fois.
+- **Journaux :** `~/.agent-bridge/state/vibe-plugin.log` (les outils dans vibe), `vibe-<id>.log` (`vibe-run`), `vibe-new.log`.
 
 ## Autres machines
 
@@ -256,6 +289,7 @@ Diaulos laisse des agents agir sur ce qu'ils reçoivent. Lisez ceci avant de bra
 - **Un pair n'est pas l'utilisateur.** Les messages reçus sont marqués comme venant d'un agent pair. Les agents savent qu'un tel message ne vaut jamais accord de l'utilisateur, et qu'ils ne doivent jamais faire pour un pair ce que leurs propres permissions ont bloqué.
 - **Expéditeur non vérifié.** Sur une seule machine, l'adresse `from` est déclarée par l'expéditeur. Un message qui prétend relayer l'utilisateur ne vaut jamais accord de sa part.
 - **Le jeton d'agy** (`ANTIGRAVITY_CSRF_TOKEN`) n'est jamais écrit sur disque ni dans les logs.
+- **Mistral Vibe.** Un message à une conversation vibe la fait agir avec vos réglages de vibe, dans la TUI comme dans les tours en arrière-plan. Ces tours refusent chaque demande d'autorisation, mais les outils que vous avez autorisés dans la configuration de vibe tournent quand même. Chaque `@` d'un message livré est neutralisé : un message ne peut pas faire lire un fichier à vibe en le nommant.
 
 > [!WARNING]
 > **Brancher un programme (`ext:<nom>`), c'est confier du texte extérieur à un agent qui peut agir sur votre machine.** Quiconque peut écrire dans la source de ce programme (un chat, une issue, une ligne de log) peut écrire à votre agent, y compris des instructions conçues pour le détourner (injection de prompt). La mention « pair » guide le modèle, elle ne l'arrête pas.
@@ -289,6 +323,9 @@ Diaulos laisse des agents agir sur ce qu'ils reçoivent. Lisez ceci avant de bra
 | Une session Claude n'apparaît pas | Seules les sessions lancées avec le canal sont listées. Sans canal, un `Monitor` sur `python3 -u ~/.agent-bridge/bridge.py watch claude` lit la boîte commune `claude`. |
 | `not delivered ... kept in the inbox, retry in 10s` (log du relais) | Le language server d'agy est occupé ou momentanément injoignable ; le message est retenté automatiquement. |
 | `'agy' matches 2 live agy peers` | Désignez-en une avec `agy@<dossier>`, `agy:<début de l'id>` ou `agy:<nom>`. |
+| `list` montre une TUI vibe avec `no injection` | Une mise à jour de vibe a changé les fonctions internes qu'utilise Diaulos : les messages attendent que vibe se ferme ; `vibe-run` les livre ensuite en 30 s environ quand une session Claude Code avec le canal est ouverte, sinon avec le prochain message envoyé à cette conversation. Lisez `~/.agent-bridge/state/vibe-plugin.log`. |
+| Un message à une conversation vibe fermée reste sans réponse | Lisez `~/.agent-bridge/state/vibe-<id>.log`. Après 3 essais ratés, l'expéditeur reçoit une note et le message est gardé en `.failed`. |
+| vibe n'a pas d'outil `bridge_send` | Relancez vibe, et vérifiez `~/.vibe/tools/agent_bridge.py` et `vibe-plugin.log`. |
 | `'claude:<nom>' matches 0 live claude peers` | Cette session s'est terminée, a été renommée ou n'a pas de canal. Lancez `bridge.py list`. |
 | `bridge.py remote …` affiche l'aide générale | La copie installée est plus ancienne : relancez l'installeur. |
 | `needs a person at a terminal` | Lancez la commande vous-même dans un vrai terminal (pas par un agent, ni avec `!` dans Claude Code). |
@@ -303,11 +340,13 @@ Diaulos laisse des agents agir sur ce qu'ils reçoivent. Lisez ceci avant de bra
 - `agy:new`, le relais automatique et les conversations Desktop lues sur disque demandent Antigravity Desktop sous Linux.
 - Claude Code affiche un écran de confirmation à chaque lancement, tant que la préversion des channels l'exige.
 - Sous Windows, les règles d'autorisation de Claude Code ne couvrent pas les commandes PowerShell lancées par Claude : il peut demander confirmation avant d'exécuter les commandes du pont.
+- **Mistral Vibe.** Le réveil d'une TUI ouverte et le plafond de prix des tours en arrière-plan passent par des fonctions internes de vibe, vérifiées sur vibe 2.20.0 ; une autre version peut les perdre (`list` dit alors `no injection` ou `price cap not set`). Un message n'arrive jamais au milieu d'un tour, seulement après. Si une TUI est tuée pendant un tour livré, le message est livré de nouveau : en 60 s environ quand une session Claude Code avec le canal est ouverte, sinon à la prochaine commande Diaulos (`list`, `send`) ; il peut alors apparaître deux fois dans l'historique de vibe. `vibe:new` ne peut pas ouvrir de fenêtre TUI : ouvrez la conversation avec `vibe --resume <identifiant de session>`. Le titre automatique d'une conversation lancée par un message est l'en-tête du pont, jusqu'à un `/rename`. Dans `vibe -p`, `bridge_list_agents` ne montre pas sa propre conversation. Un `/rename` tapé avant le premier tour d'une nouvelle conversation n'arrive à Diaulos qu'à la fin de ce tour : d'ici là, `vibe:<nom>` est refusé (utilisez `vibe:<id>`). Quand une TUI s'arrête parce que son terminal a été fermé, son pid peut rester dans le fichier de pair ; `list` montre quand même le bon état, car il vérifie que le pid est vivant. Si vous ouvrez une conversation pendant qu'un tour en arrière-plan y tourne, les deux écrivent la même session ; vibe affiche un avertissement.
 
 **Versions testées**
 
 - Linux, Claude Code 2.1.301, agy 1.4.9 (language server 1.4.0, Gemini 3.8 Flash) : échange de messages et réveil de sessions inactives avec la CLI agy, Antigravity Desktop et Antigravity IDE ; sur Desktop, le relais partagé, le relais automatique, une conversation pas chargée depuis le lancement et `agy:new` ; avec la CLI agy, un terminal fermé et `agy:new-cli`. Pas encore vérifiés : les nouveautés Desktop sur l'IDE, et le hook `Stop` en écoute sous Desktop et IDE.
 - Windows 11, Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14 : hooks, réveil d'un agy inactif par le relais, réveil d'une session Claude interactive par le canal MCP, et messages dans les deux sens.
+- Mistral Vibe (12 novembre 2026) : Linux, vibe 2.20.0 avec `devstral-small`, Python 3.12 : envoi depuis la TUI, `vibe -p` et `vibe-acp` ; réveil d'une TUI inactive (0,7 à 0,8 s) ; livraison après un tour occupé ; une conversation fermée (même session) ; `vibe:new` ; noms et préfixes ; le plafond de prix ; une TUI tuée en plein tour. Pas encore essayé : Windows (l'installeur PowerShell suit la même logique mais n'a pas été lancé sous Windows).
 - Autres machines (6 novembre 2026) : une machine Linux et un second ordinateur sur un autre réseau, appairés par ntfy.sh, avec une session Claude Code de chaque côté : un refus et son avis, puis un message et sa réponse. Pas encore vérifié : la passerelle sur une vraie machine Windows (la suite de tests passe sous Windows en CI).
 
 ## Fonctionnement
@@ -316,9 +355,9 @@ Claude Code et agy ne partagent aucun protocole : Diaulos s'appuie donc sur une 
 
 <p align="center"><img src="docs/images/architecture.svg" alt="Les expéditeurs écrivent dans la boîte aux lettres ~/.agent-bridge ; Claude est réveillé par son canal MCP, agy par son language server ou par agy -p, et les messages distants passent par la passerelle" width="900"></p>
 
-Un lecteur réserve un message de manière atomique en le déplaçant dans `archive/` : deux lecteurs n'obtiennent donc jamais le même. Si la livraison échoue, le message retourne dans la boîte et sera retenté ; un lecteur tué en pleine livraison peut le perdre. Tous les détails, y compris la liste complète de ce que l'installeur modifie, sont dans les [coulisses](docs/INTERNALS.md) (en anglais).
+Un lecteur réserve un message de manière atomique en le déplaçant dans `archive/` : deux lecteurs n'obtiennent donc jamais le même. Si la livraison échoue, le message retourne dans la boîte et sera retenté ; un lecteur tué en pleine livraison peut le perdre. Une vibe ouverte reçoit le message depuis son propre processus, par le fichier d'outils qu'elle charge ; une vibe fermée par `vibe-acp`. Tous les détails, y compris la liste complète de ce que l'installeur modifie, sont dans les [coulisses](docs/INTERNALS.md) (en anglais).
 
-**Ce qui est installé :** `~/.agent-bridge/` (le pont et ses données), des hooks agy globaux dans `~/.gemini/config/hooks.json`, le serveur MCP `agent-bridge` pour Claude Code (portée utilisateur), les skills `agy-bridge` et `diaulos-remote` dans `~/.claude/skills/`, des règles d'autorisation dans `~/.claude/settings.json` et, avec `--shell` / `-Shell`, le wrapper `claude` (`~/.bashrc`, profil PowerShell, `AutoRun` de cmd). Chaque fichier de configuration est d'abord sauvegardé en `<fichier>.bak-agent-bridge`, et le désinstalleur annule ces changements (les boîtes aux lettres et les clés restent, sauf avec `--purge`).
+**Ce qui est installé :** `~/.agent-bridge/` (le pont et ses données), `~/.vibe/tools/agent_bridge.py` quand vibe est installée, des hooks agy globaux dans `~/.gemini/config/hooks.json`, le serveur MCP `agent-bridge` pour Claude Code (portée utilisateur), les skills `agy-bridge` et `diaulos-remote` dans `~/.claude/skills/`, des règles d'autorisation dans `~/.claude/settings.json` et, avec `--shell` / `-Shell`, le wrapper `claude` (`~/.bashrc`, profil PowerShell, `AutoRun` de cmd). Chaque fichier de configuration est d'abord sauvegardé en `<fichier>.bak-agent-bridge`, et le désinstalleur annule ces changements (les boîtes aux lettres et les clés restent, sauf avec `--purge`).
 
 ## Développement
 

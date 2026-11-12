@@ -4,7 +4,7 @@ How Diaulos works under the hood. For installing and using it, read the [README]
 
 ## Overview
 
-Claude Code and agy share no protocol, so Diaulos uses a file mailbox plus the extension points each tool already offers.
+Claude Code, agy and Mistral Vibe share no protocol, so Diaulos uses a file mailbox plus the extension points each tool already offers.
 
 ```
 any agent ── send ──▶  ~/.agent-bridge/inbox/<address>/*.json
@@ -13,6 +13,8 @@ any agent ── send ──▶  ~/.agent-bridge/inbox/<address>/*.json
                          ├─▶ agy, idle:         relay calls the local language server, which starts a new turn
                          ├─▶ agy CLI, closed:   cli-run runs one turn with agy -p --conversation <id>
                          ├─▶ Claude, idle:      MCP channel server pushes a <channel> event, which starts a new turn
+                         ├─▶ vibe TUI, idle:    the plugin inside vibe submits the message as the next prompt
+                         ├─▶ vibe, closed:      vibe-run reopens the session with vibe-acp (session/load) for one turn
                          └─▶ remote:<machine>:  the gateway seals it and publishes it on the relay
 ```
 
@@ -48,6 +50,21 @@ All state lives in `~/.agent-bridge/` (`AGENT_BRIDGE_HOME`): `inbox/`, `archive/
 - A session's address is `claude:<session name>`, read from `~/.claude/sessions/<pid>.json`. It follows `/rename`: the old names become aliases and their waiting messages move to the new inbox.
 - Without the channel, a `Monitor` on `python3 -u ~/.agent-bridge/bridge.py watch claude` works as a fallback. It reads the shared `claude` inbox and expires after 30 min.
 
+## Mistral Vibe side
+
+The full design, with the source lines of vibe 2.20.0 it relies on, is in [VIBE-DESIGN.md](VIBE-DESIGN.md).
+
+- **One tool file, loaded by vibe.** vibe executes every `$VIBE_HOME/tools/*.py` in its own process, in the TUI, `-p` and ACP. The installer writes `agent_bridge.py` there from `install/vibe-tool.py`, with the absolute bridge home filled in. The shim defines `bridge_send` and `bridge_list_agents` as `BaseTool` subclasses whose config has `permission = ALWAYS`, so they never ask for approval. It loads `vibe_plugin.py` by path (`importlib.util.spec_from_file_location`, module name `agent_bridge_vibe_plugin`), which loads `bridge.py`, `vibe_sessions.py` and `vibe_runner.py` the same way. Nothing is imported by a bare name: vibe's own top-level package is called `vibe`. If the bridge is broken, vibe still starts and the tools answer `error: Diaulos is not available`.
+- **Address.** vibe gives a new session id at each `/clear`, compaction and rewind, but keeps its last 12 hex digits. That suffix is the key: `vibe:<suffix>`. A conversation is every saved `meta.json` with that suffix; its current session is the one saved last (`end_time`). A session whose parent has another suffix is a subagent and is left out (subagents also save under their parent's `agents/` folder). `vibe:<name>` is the `/rename` title. `save_dir` is read from `$VIBE_HOME/config.toml` (`tomllib`, or a line reader before Python 3.11).
+- **Sender.** `bridge_send` takes the suffix from the tool call's `session_id`. The plugin also sets `AGENT_BRIDGE_ADDRESS=vibe:<suffix>` and removes `ANTIGRAVITY_CONVERSATION_ID`, so a `bridge.py send` from vibe's bash tool has the same `from`.
+- **Delivery to an open TUI.** A daemon thread finds the `VibeApp` and, every second, inside vibe's event loop (`call_from_thread`), checks five conditions: no agent turn running, the input box shown (no approval or question dialog), vibe's queue not draining, its queue empty and not paused, no `!` command running. Then it claims the messages and calls `_handle_user_message`, which is what vibe's own `/loop` does. Each `@` gets a word joiner after it, so vibe does not inline a file. Messages are never put in vibe's in-memory queue: a crash would lose them.
+- **In-flight record.** Before the call, the plugin writes `state/vibe-inflight/<suffix>.json` (pid, session, claimed files), and deletes it once the turn has ended and `messages.jsonl` has grown. If no turn started (no new `_agent_task`, e.g. images refused) or the turn was cancelled before any save, the messages go back to the inbox, and the input box is cleared if it holds the injected text. A record whose pid is dead is put back once by whoever lists vibe peers next; the MCP channel of each Claude Code session does it every 30 s. vibe saves the history after each step, so a vibe killed mid-turn can get the message twice.
+- **Closed conversation.** `send` starts `bridge.py vibe-run <suffix>` (one per conversation, detached, like `cli-run`). It waits 1 s for a burst, then speaks ACP to `vibe-acp` in the conversation's folder: `initialize`, `session/load` (same id, same folder), `session/set_config_option max_turns`, `session/prompt`. It answers every `session/request_permission` with `reject_once`. It reads `state/vibe-limits.json` (`max_turns` 20, `max_price` 0.50, 3 attempts) and passes the price cap and the suffix to `vibe-acp` in its environment. `vibe -p --resume` is not used: it forks into a new session. `vibe:new` goes through `bridge.py vibe-new` (`session/new`).
+- **Price cap.** ACP has no public price limit. In `vibe-acp`, the plugin wraps `AgentLoop._setup_middleware` and sets `_max_price`, so vibe adds its own `PriceLimitMiddleware`. It writes `price_cap: true` or `false` in the peer file; with `false`, `list` adds `price cap not set, max_turns only`. The cap acts between steps, so one step can overshoot it. A turn stopped by a cap is logged as such and reported to the sender, and the next delivered text starts with a note that the previous turn was cut (`state/vibe-cut/<suffix>`).
+- **Concurrency.** The peer file `peers/vibe-<suffix>.json` has one pid field per role (`tui_pid`, `runner_pid`, `acp_pid`), each written only by its owner. `vibe-run` never runs while a TUI holds the conversation, and a TUI does not claim while `vibe-run` runs. Each "check, then claim or start" step holds the lock `state/vibe-<suffix>` (best effort: 2 s wait, 10 s stale). A person who opens the conversation during a background turn gets a vibe notice.
+- **Loops.** The delivered text ends with `If bridge_send answers with an error, do not call it again`. An `ext:` sender with no reader gets `has no reader: do not reply with bridge_send` instead of the reply line, a send to it is refused as not delivered, and `bridge_send` stops calling an address that failed twice in the same process.
+- **vibe internals used** (vibe 2.20.0): `VibeApp._handle_user_message`, `_agent_running`, `_agent_task`, `_current_bottom_app`, `_queue`, `_input_queue`, `_bash_task`, `AgentLoop._max_price`, `_setup_middleware`. When a name the TUI delivery needs is missing, the plugin registers `wake: none`: messages wait until the TUI exits, then `vibe-run` delivers them, started by the 30 s check of a Claude Code MCP channel or by the next `send`. When `_max_price` or `_setup_middleware` is missing, the plugin writes `price_cap: false` and only `max_turns` holds. Both cases are logged in `state/vibe-plugin.log`.
+
 ## Delivery
 
 - **Addresses.** A message to an unknown `claude:<name>` is refused with the list of live peers, so nothing is lost silently. An agent cannot message itself. Concrete addresses are strictly validated: path separators are forbidden, and an address cannot end in `.` or `..`.
@@ -72,11 +89,12 @@ All state lives in `~/.agent-bridge/` (`AGENT_BRIDGE_HOME`): `inbox/`, `archive/
 
 | Path | What |
 |---|---|
-| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py`, `remote.py`, the shell wrappers and the mailboxes |
+| `~/.agent-bridge/` | `bridge.py`, `mcp_channel.py`, `remote.py`, `vibe_sessions.py`, `vibe_runner.py`, `vibe_plugin.py`, the shell wrappers and the mailboxes |
 | `~/.agent-bridge/remote/` (after pairing) | the keys of paired machines and the gateway state |
 | `~/.agent-bridge/agy-hook.cmd` (Windows) | Windows hook launcher (OEM code page, handles spaces and accents) |
 | `~/.agent-bridge/state/agy.auto-relay` (Linux, `--auto-relay`) | turns on the experimental auto-relay |
 | `~/.gemini/config/hooks.json` | agy hooks, under the key `agent-bridge` |
+| `~/.vibe/tools/agent_bridge.py` (`$VIBE_HOME/tools/`, when vibe is installed) | the Mistral Vibe tools; a different file already there is kept as `agent_bridge.py.bak-agent-bridge` and restored by the uninstaller, which also removes `tools/` and `__pycache__` if it created them |
 | `~/.claude/skills/agy-bridge/`, `~/.claude/skills/diaulos-remote/` | Claude Code skills |
 | `~/.claude/settings.json` | allow rules for the bridge commands and MCP tools |
 | `~/.claude.json` (via `claude mcp add -s user`) | the `agent-bridge` MCP server |
@@ -92,4 +110,5 @@ Every config file that is edited is backed up first as `<file>.bak-agent-bridge`
 - `install.ps1` writes the absolute path of your Python interpreter into the agy hooks and the MCP server entry, so they never depend on `PATH` or on the Microsoft Store aliases.
 - Windows hooks run through `~/.agent-bridge/agy-hook.cmd`, written in the active OEM code page (e.g. cp850), which avoids `cmd /c` quoting issues even when paths contain spaces or accented characters.
 - Commands suggested to agents use the absolute Python interpreter path, prefixed with `&` if paths contain spaces (PowerShell 5.1 call operator).
+- Mistral Vibe: `install.ps1` and `uninstall.ps1` call the same `install/vibe_install.py` as the shell scripts. Not run on Windows yet.
 - The relay does not import `ctypes`. Our explanation, from testing: agy appears to run each command on a desktop that it closes when the command ends. A process left behind on it cannot initialize `_ctypes`. The relay watches agy through `_winapi` instead. For the same reason, the agy hook does not start the remote gateway on Windows.
