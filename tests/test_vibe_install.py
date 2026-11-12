@@ -23,6 +23,8 @@ import unittest
 from helpers import ROOT, WINDOWS
 
 VIBE_PYTHON = os.path.expanduser("~/.local/share/uv/tools/mistral-vibe/bin/python")
+RESTART_VIBE = ("Restart open vibe TUIs so they load the bridge tools. "
+                "If you install vibe later, run this installer again.")
 LOAD = ("import sys; from pathlib import Path; from vibe.core.tools.manager import ToolManager; "
         "t = ToolManager._load_tools_from_file(Path(sys.argv[1])); print(sorted(x.get_name() for x in t))")
 OTHER = "# someone else's vibe tool\nprint('mine')\n"
@@ -93,6 +95,7 @@ class VibeInstallTest(unittest.TestCase):
         before = self.snapshot(vibe_home)
         out = self.run_script("install.sh")
         self.assertIn("vibe        -> " + os.path.join(vibe_home, "tools", "agent_bridge.py"), out)
+        self.assertIn(RESTART_VIBE, out)
         self.assertIn(f"BRIDGE_DIR = {self.bridge_home!r}", self.shim_text(vibe_home))
         for name in ("vibe_sessions.py", "vibe_runner.py", "vibe_plugin.py"):
             self.assertTrue(os.path.exists(os.path.join(self.bridge_home, name)), name)
@@ -157,6 +160,7 @@ class VibeInstallTest(unittest.TestCase):
     def test_no_vibe_nothing_written(self):
         out = self.run_script("install.sh")
         self.assertIn("vibe        -> not found", out)
+        self.assertIn(RESTART_VIBE, out)  # vibe installed later: the installer must run again
         self.assertFalse(os.path.exists(os.path.join(self.home, ".vibe")))
         self.run_script("uninstall.sh")
         self.assertFalse(os.path.exists(os.path.join(self.home, ".vibe")))

@@ -137,6 +137,7 @@ fi
 
 echo
 echo "Done. Restart agy sessions so they load the new hooks."
+echo "Restart open vibe TUIs so they load the bridge tools. If you install vibe later, run this installer again."
 if [ "$SHELL_WRAPPER" = 1 ]; then
   echo "In a new terminal, plain \`claude\` now starts with the agent-bridge channel."
 else
