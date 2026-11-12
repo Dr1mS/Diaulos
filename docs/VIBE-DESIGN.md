@@ -77,6 +77,11 @@ vibe ── bridge_send tool (plugin, in-process) ──▶ inbox of the recipie
 - **Mechanism.** The native tool `bridge_send(to, text)` calls `bridge.send(to, text, sender="vibe:<suffix>")` in the vibe process. `bridge_list_agents(all?, days?)` calls `peers()` and `describe()`. Both use a config subclass with `permission = ALWAYS`, so they run without approval in the TUI, in `-p` and in ACP.
 - **Evidence.** Probe S9 (`prototypes/vibe-s9/README.md`). B1: a tool file with `BridgeEcho(BaseTool)` and a config subclass with `permission = ALWAYS`; the model sees it as `bridge_echo`. B2: it ran without any approval in the three modes: `-p` without `--auto-approve` (exit 0), `vibe-acp` (0 `session/request_permission`), TUI without `--auto-approve` (no dialog, `✓ Success`); `tool_calls_rejected` 0. In all three, `ctx.session_id` equals `meta.json` `session_id`. Source: `base.py:69` (`ctx.session_id`), `base.py:129` and `manager.py:565-586` (permission resolution).
 - **Limits.** If the shim's `BaseTool` import fails on a future vibe, vibe drops the tools silently (`manager.py:180-181`). The shim catches its own errors and writes them to `state/vibe-plugin.log`, and `run-proofs.sh` checks that both tools are listed.
+- **A sender nobody reads (decision after T3c, 2026-11-12).** A first real TUI pass looped: the model called `bridge_send` 16 times towards `ext:real`, which had no watcher, until the price cap stopped it ($0.515). `send` does **not** refuse an `ext:` sender without a reader: a script may send first and start `watch ext:<name>` afterwards, as the README's "Programs and scripts" allows. Three guards instead:
+  1. At delivery, when a sender is an `ext:` address with no live watcher, the reply line says `ext:<name> has no reader: do not reply with bridge_send` instead of `Reply with the bridge_send tool, to=…` (plugin and `vibe-run`).
+  2. A refused send to a dead `ext:` says that the message was not delivered and must not be sent again (text of the `resolve` error for `ext`).
+  3. In one vibe process, `bridge_send` to an address that already failed twice answers `stopped: <to> failed twice, do not call bridge_send for it again` without calling `send`.
+  The price cap stays the last guard. Tests: T3c (1, 3), T3a (2).
 
 ### 4.2 Receive, vibe idle (criterion 2)
 
