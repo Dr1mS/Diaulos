@@ -89,7 +89,7 @@ A session is woken **only when a message is waiting for it**, and messages that 
 
 ## Installation
 
-Requirements: Linux or Windows 10/11, Python 3.8 or later, the agy CLI or Antigravity Desktop, Claude Code if you want Claude sessions to join, and Mistral Vibe 2.20 (`mistral-vibe`) if you want vibe sessions to join.
+Requirements: Linux or Windows 10/11, Python 3.8 or later, the agy CLI or Antigravity Desktop, Claude Code if you want Claude sessions to join, and Mistral Vibe 2.20 (`mistral-vibe`) if you want vibe sessions to join (the vibe part is tested on Linux only; nothing of it has run on Windows yet).
 
 ```bash
 git clone https://github.com/Dr1mS/Diaulos && cd Diaulos
@@ -115,10 +115,11 @@ Then:
 
 ## Quick start
 
-You do not have to type commands: each agent knows its own address and how to reach the others. agy is told at startup by its hook; Claude Code gets the `send` and `list_agents` tools of the `agent-bridge` MCP server. Just ask:
+You do not have to type commands: each agent knows its own address and how to reach the others. agy is told at startup by its hook; Claude Code gets the `send` and `list_agents` tools of the `agent-bridge` MCP server; Mistral Vibe gets the `bridge_send` and `bridge_list_agents` tools. Just ask:
 
 - in Claude Code: *"send this diff to agy for a review"*;
-- in agy: *"ask the Claude session to check the tests"*.
+- in agy: *"ask the Claude session to check the tests"*;
+- in vibe: *"ask the Claude session to review this"*.
 
 The same thing by hand, from a shell:
 
@@ -156,7 +157,7 @@ The receiver answers to the `from` address of the message it got.
 | `ext:<name>` | A program connected with `watch ext:<name>` |
 | `remote:<machine>/<address>` | A session on a paired machine, e.g. `remote:laptop/claude:review` |
 
-`bridge.py` is `~/.agent-bridge/bridge.py`. The MCP tools of Claude Code take the same addresses and options.
+`bridge.py` is `~/.agent-bridge/bridge.py`. The MCP tools of Claude Code take the same addresses and options. vibe's `bridge_send` takes the same addresses but no `--workspace`: a `vibe:new` or `agy:new-cli` it starts works in vibe's own directory, an `agy:new` in the relay's workspace.
 
 | Command | What it does |
 |---|---|
@@ -207,23 +208,26 @@ python3 ~/.agent-bridge/bridge.py send agy:new@tester "Run the test suite and se
 
 ## Mistral Vibe
 
+A vibe conversation can send to and list the other agents, and it receives their messages whether its TUI is idle, working or closed. Tested on Linux only; Windows is untested for the vibe part.
+
 The installer writes one file, `~/.vibe/tools/agent_bridge.py` (`$VIBE_HOME/tools/` if set), and edits no vibe config. vibe loads it at startup in every mode (TUI, `vibe -p`, `vibe-acp`). It gives vibe two tools, `bridge_send` and `bridge_list_agents`, that run without asking for approval, and it delivers messages to an open TUI.
 
 | | What happens to a message |
 |---|---|
-| TUI open, idle | It becomes the next prompt, about 1 s after it arrives (`list`: `TUI: wakes on message`) |
+| TUI open, idle | It becomes the next prompt, about 1 s after it arrives (0.7 to 1.0 s measured; `list`: `TUI: wakes on message`). This holds before the first prompt too, at the `vibe:<id>` that `list` shows |
 | TUI open, working | It waits in the mailbox and goes in about 1 s after the turn ends. Prompts you queued go first; it never cuts your turn |
 | TUI open, after Esc with prompts queued | It waits until you press Enter and the queue drains (`TUI, paused (Esc): delivers after Enter`) |
 | TUI open, running a `!` command | It waits for the command to end |
-| Closed | `vibe-run` reopens the same session with `vibe-acp`, runs one turn per batch, and exits (`closed: wakes with vibe-acp`). `vibe --resume <session id>` then shows the turn |
-| TUI killed in the middle of a delivered turn | The message is delivered again by `vibe-run`; it can then appear twice in the history |
+| Closed | Diaulos reopens the same session in the background with `vibe-acp` (process `vibe-run`), runs one turn per batch, and exits (`closed: wakes with vibe-acp`). `vibe --resume <session id>` then shows the turn |
+| Closed, `vibe-acp` not found | It waits until you open the conversation in a TUI (`closed: waits until reopened (no vibe-acp)`) |
+| TUI killed in the middle of a delivered turn | The message is delivered again by `vibe-run`; it can then appear twice in the history. Except during the very first turn of a new conversation: see [Status and limits](#status-and-limits) |
 
 ```bash
 python3 ~/.agent-bridge/bridge.py send vibe:new@docs "Write the changelog entry for the last commit" --workspace ~/projects/web
 # the bridge sends you vibe:<id>; the conversation is also reachable as vibe:docs, and opens with vibe --resume <session id>
 ```
 
-- **Background turns are capped.** `vibe-run` and `vibe:new` stop after `max_turns` (20) and, best effort, at a price cap of $0.50 per run. Change both in `~/.agent-bridge/state/vibe-limits.json`, e.g. `{"max_turns": 10, "max_price": 0.20}`. The price cap uses vibe internals: if a vibe update breaks it, `list` adds `price cap not set, max_turns only` and only `max_turns` holds. A TUI you start yourself has no price cap from Diaulos.
+- **Background turns are capped.** `vibe-run` and `vibe:new` stop after `max_turns` (20) and, best effort, at a price cap of at most about $0.50 per background run (checked before each model call, so a run can end slightly above it). This is not a total budget: each new run starts again from zero, a back-and-forth between two agents is not capped, and when one run handles several batches, they share its cap. Change both in `~/.agent-bridge/state/vibe-limits.json`, e.g. `{"max_turns": 10, "max_price": 0.20}`. The price cap uses vibe internals: if a vibe update breaks it, `list` adds `price cap not set, max_turns only` and only `max_turns` holds. A TUI you start yourself has no price cap from Diaulos.
 - **A background turn cannot ask you anything.** `vibe-run` refuses every approval request (`reject_once`), so a tool that needs approval fails in that turn. The bridge tools never ask.
 - **A turn stopped by a limit** is reported to the sender, and the next message's text says that the previous turn was cut, so vibe does not finish it for someone else.
 - **No retry loops.** Each delivered message ends with `If bridge_send answers with an error, do not call it again`, and `bridge_send` stops calling an address that failed twice.
@@ -346,7 +350,7 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 
 - Linux, Claude Code 2.1.301, agy 1.4.9 (language server 1.4.0, Gemini 3.8 Flash): messaging and waking idle sessions with the agy CLI, Antigravity Desktop and Antigravity IDE; on Desktop, the shared relay, the auto-relay, a conversation not loaded since launch and `agy:new`; with the agy CLI, a closed terminal and `agy:new-cli`. Not verified yet: the newer Desktop features on the IDE, and the listening `Stop` hook on Desktop and IDE.
 - Windows 11, Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14: hooks, relay waking an idle agy, MCP channel waking an interactive Claude session, and messages both ways.
-- Mistral Vibe (2026-11-12): Linux, vibe 2.20.0 with `devstral-small`, Python 3.12: send from the TUI, `vibe -p` and `vibe-acp`; waking an idle TUI (0.7 to 0.8 s); delivery after a busy turn; a closed conversation (same session); `vibe:new`; names and prefixes; the price cap; a TUI killed mid-turn. Not tried yet: Windows (the PowerShell installer has the same logic but was not run on Windows).
+- Mistral Vibe (2026-11-12): Linux, vibe 2.20.0 with `devstral-small`, Python 3.12: send from the TUI, `vibe -p` and `vibe-acp`; waking an idle TUI (0.7 to 1.0 s); delivery after a busy turn; a closed conversation (same session); `vibe:new`; names and prefixes; the price cap; a TUI killed mid-turn. Not tried yet: a live Claude Code session (vibe to Claude was checked on the mailbox only); the Esc and `!` rows of the table above; Windows: nothing of the vibe part ran there.
 - Other machines (2026-11-06): a Linux machine and a second computer on another network, paired through ntfy.sh, a Claude Code session on each side: a refusal and its notice, then a message and its reply. Not verified yet: the gateway on a real Windows machine (the test suite passes on Windows in CI).
 
 ## How it works
