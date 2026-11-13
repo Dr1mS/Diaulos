@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""A fake `vibe` for the vibe-run and vibe-new tests (tests/test_vibe_runner.py): only the
+`vibe -p` use that bridge/vibe_runner.py makes, no model.
+
+    vibe --prompt-file P --max-price X --max-turns N --output json --output-dir D
+         (--resume <session id> | --workdir <dir>)
+
+It appends one JSON line per run to FAKE_VIBE_LOG: argv, the prompt text, its cwd, and the
+AGENT_BRIDGE_VIBE_RUN and AGENT_BRIDGE_ADDRESS it was given. Then, by FAKE_VIBE_MODE:
+  (unset)     writes D/export.json {session_id, outcome "finished", cost_usd 0.0012}; with
+              --workdir, a new session: <VIBE_HOME>/logs/session/unified/<id>/meta.json
+  turn_limit  the same, outcome "turn_limit"
+  price       the same, outcome "price_limit"
+  open        "Session is already open" on stderr, exit 2, no export.json
+  fail        "boom" on stderr, exit 1, no export.json
+  fail_once   fail on the first run (FAKE_VIBE_LOG has no line yet), then as unset
+FAKE_VIBE_SLEEP: seconds to wait before the answer.
+"""
+import json
+import os
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+
+
+def option(argv, name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def main(argv):
+    log = os.environ.get("FAKE_VIBE_LOG")
+    first = not (log and os.path.exists(log))
+    with open(option(argv, "--prompt-file"), encoding="utf-8") as f:
+        prompt = f.read()
+    if log:
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"argv": argv, "prompt": prompt, "cwd": os.getcwd(),
+                                "run": os.environ.get("AGENT_BRIDGE_VIBE_RUN"),
+                                "address": os.environ.get("AGENT_BRIDGE_ADDRESS")}) + "\n")
+    time.sleep(float(os.environ.get("FAKE_VIBE_SLEEP") or 0))
+    mode = os.environ.get("FAKE_VIBE_MODE", "")
+    if mode == "open":
+        sys.stderr.write("Error: Session is already open in another process\n")
+        return 2
+    if mode == "fail" or (mode == "fail_once" and first):
+        sys.stderr.write("boom\n")
+        return 1
+    session = option(argv, "--resume")
+    if not session:
+        session = str(uuid.uuid4())
+        save = os.path.join(os.environ.get("VIBE_HOME") or os.path.expanduser("~/.vibe"), "logs", "session")
+        folder = os.path.join(save, "unified", session)
+        os.makedirs(folder)
+        now = datetime.now(timezone.utc).isoformat()
+        with open(os.path.join(folder, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"session_id": session, "parent_session_id": None, "start_time": now, "end_time": now,
+                       "environment": {"working_directory": option(argv, "--workdir")},
+                       "child_sessions": [], "title": None, "title_source": "auto"}, f)
+    outcome = {"turn_limit": "turn_limit", "price": "price_limit"}.get(mode, "finished")
+    with open(os.path.join(option(argv, "--output-dir"), "export.json"), "w", encoding="utf-8") as f:
+        json.dump({"session_id": session, "outcome": outcome, "cost_usd": 0.0012}, f)
+    print(json.dumps({"session_id": session}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -4,7 +4,8 @@
 #   ~/.gemini/config/hooks.json          global agy hooks, under the key "agent-bridge"
 #   ~/.claude/skills/agy-bridge/SKILL.md Claude Code skill (and diaulos-remote, for other machines)
 #   ~/.claude/settings.json              allow rule for bridge commands
-#   ~/.vibe/tools/agent_bridge.py        Mistral Vibe tools, if vibe is installed ($VIBE_HOME)
+#   ~/.vibe/plugins/diaulos/             Mistral Vibe 3 plugin, if vibe is installed ($VIBE_HOME), and
+#                                        one marked block in ~/.vibe/config.toml; ~/.agent-bridge/vibe-diaulos
 # Re-run it to update. Each config file it edits is backed up first as <file>.bak-agent-bridge.
 # Options:
 #   --shell       a plain `claude` starts with the MCP channel (~/.bashrc)
@@ -29,12 +30,13 @@ mkdir -p "$BRIDGE_HOME"
 install -m 755 "$REPO/bridge/bridge.py" "$BRIDGE_HOME/bridge.py"
 install -m 755 "$REPO/bridge/mcp_channel.py" "$BRIDGE_HOME/mcp_channel.py"
 install -m 755 "$REPO/bridge/remote.py" "$BRIDGE_HOME/remote.py"
-for f in vibe_sessions.py vibe_runner.py vibe_plugin.py; do
+for f in vibe_sessions.py vibe_runner.py vibe_mcp.py vibe_hook.py vibe_relay.py vibe_diaulos.py; do
   install -m 644 "$REPO/bridge/$f" "$BRIDGE_HOME/$f"
 done
-echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel,remote,vibe_sessions,vibe_runner,vibe_plugin}.py"
+rm -f "$BRIDGE_HOME/vibe_plugin.py"  # vibe 2.20
+echo "bridge      -> $BRIDGE_HOME/{bridge,mcp_channel,remote,vibe_sessions,vibe_runner,vibe_mcp,vibe_hook,vibe_relay,vibe_diaulos}.py"
 
-# Mistral Vibe: one file in $VIBE_HOME/tools, no vibe config edited.
+# Mistral Vibe 3: the plugin in $VIBE_HOME/plugins/diaulos, one marked block in config.toml.
 VIBE_ON_PATH=0
 command -v vibe >/dev/null && VIBE_ON_PATH=1
 VIBE_DIR="${VIBE_HOME:-$HOME/.vibe}"
@@ -138,8 +140,13 @@ fi
 
 echo
 echo "Done. Restart agy sessions so they load the new hooks."
-if [ -f "$VIBE_DIR/tools/agent_bridge.py" ]; then
-  echo "Restart open vibe TUIs so they load the bridge tools."
+if [ -d "$VIBE_DIR/plugins/diaulos" ]; then
+  if [ "$SHELL_WRAPPER" = 1 ]; then
+    echo "Restart open vibe TUIs; in a new terminal, plain \`vibe\` opens with the Diaulos relay."
+  else
+    echo "Restart open vibe TUIs. Open vibe with $BRIDGE_HOME/vibe-diaulos so messages wake it"
+    echo "(or re-run with --shell so a plain \`vibe\` does it)."
+  fi
 else
   echo "If you install vibe later, run this installer again."
 fi

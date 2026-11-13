@@ -3,14 +3,13 @@ discovery from vibe's save_dir, addresses vibe:<suffix> and vibe:<name>,
 listing, resolve, and the start of one vibe-run for a closed conversation.
 
 Run with a throwaway VIBE_HOME filled by tests/fakes/vibe_sessions/build.py;
-a test never reads the real ~/.vibe. The fake vibe-acp is put on PATH so the
-bridge sees vibe-acp as installed. Not on Windows (the fake is a script found
-through PATH).
+a test never reads the real ~/.vibe. AGENT_BRIDGE_VIBE_REAL names the fake `vibe`
+(tests/fakes/vibe), so the bridge sees vibe as installed. Not on Windows (the fake
+is a script).
 """
 import ast
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -33,7 +32,7 @@ def load_vibe_sessions():
 
 
 class VibeSetup(BridgeTest):
-    """A VIBE_HOME with the fixture sessions, and the fake vibe-acp on PATH."""
+    """A VIBE_HOME with the fixture sessions, and the fake vibe as the vibe command."""
 
     def setUp(self):
         super().setUp()
@@ -42,20 +41,32 @@ class VibeSetup(BridgeTest):
         self.workspace = os.path.join(self.tmp, "work")
         os.makedirs(self.workspace)
         self.ids, self.folders = build(self.save_dir, self.workspace)
-        self.fake_bin = os.path.join(self.tmp, "bin")
-        os.makedirs(self.fake_bin)
-        shutil.copy(os.path.join(FAKES, "vibe-acp"), os.path.join(self.fake_bin, "vibe-acp"))
-        for key in [k for k in self.env if k.startswith("AGENT_BRIDGE_") and k != "AGENT_BRIDGE_HOME"]:
+        for key in [k for k in self.env if k.startswith(("AGENT_BRIDGE_", "FAKE_VIBE_"))
+                    and k != "AGENT_BRIDGE_HOME"]:
             del self.env[key]
-        self.env.update(VIBE_HOME=self.vibe_home, BRIDGE=BRIDGE,
-                        PATH=self.fake_bin + os.pathsep + self.env.get("PATH", ""))
+        self.env.update(VIBE_HOME=self.vibe_home, BRIDGE=BRIDGE, AGENT_BRIDGE_VIBE_REAL=os.path.join(FAKES, "vibe"),
+                        FAKE_VIBE_LOG=os.path.join(self.tmp, "vibe.jsonl"))
 
-    def without_vibe_acp(self):
-        """PATH without the fake vibe-acp, nor any real one."""
-        os.remove(os.path.join(self.fake_bin, "vibe-acp"))
-        path = [p for p in self.env["PATH"].split(os.pathsep)
-                if not os.path.exists(os.path.join(p, "vibe-acp"))]
+    def without_vibe(self):
+        """No vibe command: neither the fake nor a real one on PATH."""
+        self.env["AGENT_BRIDGE_VIBE_REAL"] = ""
+        path = [p for p in self.env["PATH"].split(os.pathsep) if not os.path.exists(os.path.join(p, "vibe"))]
         self.env["PATH"] = os.pathsep.join(path)
+
+    def open_tui(self, suffix, wake="relay"):
+        """A live TUI for vibe:<suffix>: a relay state file (wake "relay" or "off"), or with wake
+        "tui" the vibe-current file of a TUI opened with the plain vibe; this test's pid is alive."""
+        session = next(sid for case, s in SUFFIX.items() if s == suffix for sid in self.ids[case])
+        if wake == "tui":
+            path = os.path.join(self.bridge_home, "state", "vibe-current", "%d.json" % os.getpid())
+            data = {"session": session, "app_pid": os.getpid(), "run": False}
+        else:
+            path = os.path.join(self.bridge_home, "state", "vibe-relay", "%d.json" % os.getpid())
+            data = {"relay_pid": os.getpid(), "tui_pid": os.getpid(), "session": session, "wake": wake}
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return path
 
     def write_peer(self, suffix, **fields):
         folder = os.path.join(self.bridge_home, "peers")
@@ -149,7 +160,7 @@ class SessionsModuleTest(VibeSetup):
                 ast.parse(f.read(), path, feature_version=(3, 8))
 
 
-@unittest.skipIf(WINDOWS, "the fake vibe-acp is a script run through PATH")
+@unittest.skipIf(WINDOWS, "the fake vibe is a script")
 class BridgeVibeTest(VibeSetup):
     """bridge.py list / send / resolve for vibe:, as a subprocess."""
 
@@ -161,29 +172,36 @@ class BridgeVibeTest(VibeSetup):
             else:
                 self.assertNotIn("vibe:" + SUFFIX[case], listed, case)
         self.assertIn('"review_bot"', listed)
-        self.assertIn("closed: wakes with vibe-acp", listed)
+        self.assertIn("closed: wakes with vibe -p", listed)
         self.assertIn("vibe:" + SUFFIX["old"], self.listing("--all"))
 
-    def test_list_without_vibe_acp(self):
-        self.without_vibe_acp()
-        self.assertIn("closed: waits until reopened (no vibe-acp)", self.listing())
+    def test_list_without_vibe(self):
+        self.without_vibe()
+        self.assertIn("closed: waits until reopened (no vibe command)", self.listing())
 
     def test_list_with_a_live_tui(self):
         s = SUFFIX["renamed"]
-        self.write_peer(s, tui_pid=os.getpid(), tui_seen=time.time(), workspace=self.workspace, version="2.20.0")
-        self.assertIn("TUI: wakes on message", self.listing())
-        self.write_peer(s, tui_pid=os.getpid(), tui_seen=time.time(), paused=True)
-        self.assertIn("TUI, paused (Esc): delivers after Enter", self.listing())
-        self.write_peer(s, tui_pid=os.getpid(), tui_seen=time.time(), wake="none", version="9.0.0")
-        self.assertIn("TUI, no injection (vibe 9.0.0): waits until vibe exits", self.listing())
-        self.write_peer(s, tui_pid=os.getpid(), tui_seen=time.time() - 3600)
-        self.assertIn("closed: wakes with vibe-acp", self.listing(), "a stale heartbeat counts as a live TUI")
+        line = lambda: next(l for l in self.listing().splitlines() if l.startswith("vibe:" + s))
+        path = self.open_tui(s)
+        self.assertIn("TUI: wakes on message", line())
+        self.open_tui(s, wake="off")
+        self.assertIn("TUI: relay stopped waking (3 failures), delivers at next message", line())
+        os.remove(path)
+        path = self.open_tui(s, wake="tui")
+        self.assertIn("TUI: no relay, delivers at next message", line())
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"session": self.ids["renamed"][0], "app_pid": dead.pid, "run": False}, f)
+        self.assertIn("closed: wakes with vibe -p", line(), "a dead TUI counts as closed")
+        self.assertFalse(os.path.exists(path), "the file of a dead TUI is removed")
 
-    def test_list_says_when_the_price_cap_is_missing(self):
-        self.write_peer(SUFFIX["renamed"], price_cap=False)
-        self.assertIn("closed: wakes with vibe-acp, price cap not set, max_turns only", self.listing())
-        self.write_peer(SUFFIX["renamed"], price_cap=True)
-        self.assertNotIn("price cap not set", self.listing())
+    def test_a_vibe_p_run_is_not_a_tui(self):
+        path = os.path.join(self.bridge_home, "state", "vibe-current", "%d.json" % os.getpid())
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"session": self.ids["renamed"][0], "app_pid": os.getpid(), "run": True}, f)
+        self.assertIn("closed: wakes with vibe -p", self.listing())
 
     def test_remote_addresses_accept_vibe(self):
         bridge = self.load_bridge()
@@ -215,7 +233,7 @@ class BridgeVibeTest(VibeSetup):
         with self.assertRaises(SystemExit) as nobody:
             bridge.resolve("vibe")
         self.assertIn("matches 0", str(nobody.exception), "`vibe` alone picks a live TUI only")
-        self.write_peer(SUFFIX["after_clear"], tui_pid=os.getpid(), tui_seen=time.time())
+        self.open_tui(SUFFIX["after_clear"])
         self.assertEqual(bridge.resolve("vibe"), "vibe:" + SUFFIX["after_clear"])
         self.assertEqual(bridge.resolve("vibe@work"), "vibe:" + SUFFIX["after_clear"])
 
@@ -226,11 +244,11 @@ class BridgeVibeTest(VibeSetup):
         self.assertIn("vibe:" + SUFFIX["renamed"], proc.stderr, "the refusal lists the conversations")
         self.assertNotIn("vibe:" + SUFFIX["subagent"], proc.stderr)
 
-    def test_vibe_new_needs_vibe_acp(self):
-        self.without_vibe_acp()
+    def test_vibe_new_needs_vibe(self):
+        self.without_vibe()
         proc = self.send("vibe:new", "hello", check=False)
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("vibe-acp command is not installed", proc.stderr)
+        self.assertIn("the vibe command is not installed", proc.stderr)
 
     def test_vibe_new_name_is_checked(self):
         for bad in ("a b", "new", "0123456789ab"):
@@ -253,7 +271,7 @@ class BridgeVibeTest(VibeSetup):
         runner = self.peer(address).get("runner_pid")
         self.assertIsInstance(runner, int, self.peer(address))
         self.assertTrue(os.path.exists(os.path.join(self.bridge_home, "state", f"vibe-{SUFFIX['renamed']}.log")))
-        # That vibe-run delivers "first" with the fake vibe-acp, then exits.
+        # That vibe-run delivers "first" with the fake vibe -p, then exits.
         self.assertTrue(wait_for(lambda: not self.peer(address).get("runner_pid"), 30),
                         self.state(f"vibe-{SUFFIX['renamed']}.log"))
         # A second message while a vibe-run runs starts no other one.
@@ -264,17 +282,18 @@ class BridgeVibeTest(VibeSetup):
         self.send(address, "second")
         self.assertEqual(self.peer(address).get("runner_pid"), sleeper.pid)
         # Nor while a vibe TUI serves the conversation.
-        self.write_peer(SUFFIX["renamed"], tui_pid=os.getpid(), tui_seen=time.time())
+        self.write_peer(SUFFIX["renamed"], runner_pid=None)
+        self.open_tui(SUFFIX["renamed"])
         self.send(address, "third")
-        self.assertNotIn("runner_pid", self.peer(address))
+        self.assertIsNone(self.peer(address).get("runner_pid"))
         self.assertEqual([m["body"] for m in self.inbox(address)], ["second", "third"])
 
-    def test_no_vibe_run_without_vibe_acp(self):
-        self.without_vibe_acp()
+    def test_no_vibe_run_without_vibe(self):
+        self.without_vibe()
         address = "vibe:" + SUFFIX["renamed"]
         self.send(address, "hello")
         self.assertNotIn("runner_pid", self.peer(address))
-        self.assertIn("closed: waits until reopened (no vibe-acp)", self.listing())
+        self.assertIn("closed: waits until reopened (no vibe command)", self.listing())
 
     def test_bridge_does_not_import_vibe_by_sys_path(self):
         with open(BRIDGE, encoding="utf-8") as f:

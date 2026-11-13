@@ -5,9 +5,8 @@ Layout and fields are those of vibe 3.1.2 (probes T10-vibe3/14 and 20):
 <save_dir>/unified/<session id>/{meta.json,CURRENT,...}, meta.json with session_id,
 parent_session_id, start_time, end_time, title (None until set), title_source,
 environment.working_directory, child_sessions. vibe 3 keeps the id through
-/compact and --resume, and /clear starts a new id with a new suffix. Each
-folder also gets an empty messages.jsonl, only for the fake vibe-acp of the
-vibe 2.20 runner tests, which appends to it.
+/compact and --resume, and /clear starts a new id with a new suffix. The fake
+`vibe` (tests/fakes/vibe) writes the meta.json of a new session the same way.
 
 Usage:
     from tests.fakes.vibe_sessions.build import build, EXPECTED
@@ -101,7 +100,6 @@ def build(save_dir, workspace, now=None):
         with open(os.path.join(folder, "CURRENT"), "w", encoding="utf-8") as f:
             json.dump({"generation": "0000000000000001", "session_id": sid, "snapshot_sequence": 1,
                        "store_format": "mistral.vibe.unified-session-store/v1"}, f)
-        open(os.path.join(folder, "messages.jsonl"), "w").close()
         ids.setdefault(case, []).append(sid)
         folders.setdefault(case, []).append(folder)
     with open(os.path.join(root, ".session-index.json"), "w", encoding="utf-8") as f:

@@ -1,45 +1,47 @@
-"""Delivery to closed Mistral Vibe conversations, and new ones, through vibe-acp
-(docs/VIBE-DESIGN.md §4.4 to §4.6). Python 3.8+, standard library only.
+"""Delivery to closed Mistral Vibe 3 conversations, and new ones, through `vibe -p`
+(docs/VIBE-DESIGN.md §8.3). Python 3.8+, standard library only.
 
 bridge.py loads this file by path as `agent_bridge_vibe_runner`, after it has
 registered itself as `agent_bridge_core`, and runs:
 
   bridge.py vibe-run <suffix>   one per conversation, started by `send` when no
                                 vibe TUI serves it. It waits 1 s so that a burst
-                                goes in one turn, then speaks ACP to vibe-acp in
-                                the conversation's directory: initialize,
-                                session/load (same id, same folder),
-                                session/set_config_option max_turns,
-                                session/prompt. It loops while the inbox has
-                                messages, then closes vibe-acp and exits.
-  bridge.py vibe-new            one worker: one session/new and its first
-                                session/prompt per message sent to vibe:new.
+                                goes in one turn, then runs
+                                vibe --prompt-file <batch> --resume <session>
+                                     --max-price <cap> --max-turns <n> --output json
+                                     --output-dir <tmp>
+                                in the conversation's directory, and reads the
+                                cost and the outcome from <tmp>/export.json. It
+                                loops while the inbox has messages, then exits.
+                                "Session is already open" means a TUI came back:
+                                the messages wait for it.
+  bridge.py vibe-new            one worker: one `vibe -p --workdir <dir>` per
+                                message sent to vibe:new; the new session id
+                                comes from export.json.
 
-Nobody is there to approve a tool: every session/request_permission gets
-`reject_once`. The bridge tools of the plugin are ALWAYS and never ask.
+vibe runs with AGENT_BRIDGE_VIBE_RUN=1, so the plugin's hooks leave delivery to
+vibe-run. Nobody is there to approve a tool: vibe -p runs only the tools allowed
+without asking; the bridge tools of the plugin are `always`.
 
-Caps (§4.4, §4.11): `max_turns` through ACP (public), and a price per run
-passed to the plugin as AGENT_BRIDGE_VIBE_MAX_PRICE (best effort, private
-names). Both, and the number of attempts per batch, come from
-state/vibe-limits.json; a missing or invalid value gives its default.
+Caps (§4.4, §8.3): vibe's own --max-turns and --max-price, per run. Both, and the
+number of attempts per batch, come from state/vibe-limits.json; a missing or
+invalid value gives its default.
 
-Before a prompt, the runner writes state/vibe-inflight/<suffix>.json with its
-pid, the session and the claimed messages. A runner killed in the middle of a
-turn leaves it behind; whoever next takes the conversation (a runner or the
-plugin) puts those messages back in the inbox (recover_inflight).
+Before a run, the runner writes state/vibe-inflight/<suffix>.json with its pid,
+the session and the claimed messages; the relay writes the same record with the
+entryId of its request. A process killed in the middle leaves it behind; whoever
+next takes the conversation puts those messages back in the inbox
+(recover_inflight), unless the session already holds that entry.
 """
 import contextlib
 import json
 import os
-import queue
+import re
 import subprocess
 import sys
-import threading
 import time
 
 LIMITS = {"max_turns": 20, "max_price": 0.50, "attempts": 3, "retry_seconds": None}
-TURN_LIMIT_TEXT = "Turn limit of"
-PRICE_LIMIT_TEXT = "Price limit exceeded"  # vibe's PriceLimitMiddleware (core/middleware.py:73)
 CUT_NOTE = ("Note: the previous bridge turn here stopped at a limit; do not finish its work unless this "
             "message asks for it.")
 WORD_JOINER = "⁠"
@@ -80,9 +82,38 @@ def limits():
 
 # ---------------------------------------------------------------- prompt text
 
+HEADER = "Message(s) from another agent via the agent bridge."
+
+
+# vibe puts this block before a message sent with a `sender`; the relay's sender ids start with
+# "diaulos:". In the TUI, the pre_agent hook gets this block alone as its prompt, without the text
+# (gate R6, T14): the block is how it knows a relay delivery. vibe adds it only for a message sent
+# with a sender, so a message the person types never has it.
+SESSION_MESSAGE_RE = re.compile(r'^\s*<session_message from_session_id="([^"]*)"(?: from_title="([^"]*)")?/>\s*')
+
+
+def relay_sender(prompt):
+    """The from_title of vibe's <session_message/> block when the relay sent this prompt, else None."""
+    m = SESSION_MESSAGE_RE.match(prompt[:2000]) if isinstance(prompt, str) else None
+    if not m or not m.group(1).startswith("diaulos:"):
+        return None
+    return m.group(2) or m.group(1)[len("diaulos:"):]
+
+
+def is_delivery(prompt):
+    """True when a prompt is a Diaulos delivery: sent by the relay (vibe's <session_message/> block
+    from a "diaulos:" sender), or starting with the bridge header (vibe-run, after the optional
+    CUT_NOTE line)."""
+    if not isinstance(prompt, str):
+        return False
+    if relay_sender(prompt) is not None:
+        return True
+    return HEADER in prompt[:len(CUT_NOTE) + len(HEADER) + 8]
+
+
 def incoming_text(msgs, me):
     """The bridge's message blocks for vibe: every `@` gets a word joiner, so vibe does not
-    inline a file (path_prompt.py rejects U+2060), and the last line names bridge_send.
+    inline a file, and the last lines name the `send` tool of the `diaulos` server.
     After a turn cut by a limit (state/vibe-cut/<suffix>), the text starts with CUT_NOTE,
     once: the file is deleted here (§4.4, P4)."""
     text = _core()._incoming_text(msgs, me)
@@ -97,11 +128,11 @@ def incoming_text(msgs, me):
     # with no reader (§4.1, "A sender nobody reads", first guard).
     unread = [a for a in senders if _no_reader(a)]
     readable = [a for a in senders if a not in unread]
-    lines = [f"{a} has no reader: do not reply with bridge_send" for a in unread]
+    lines = [f"{a} has no reader: do not reply to it with send" for a in unread]
     if readable:
         to = readable[0] if len(readable) == 1 else "<the from of the message>"
-        lines.append(f"Reply with the bridge_send tool, to={to}  (you are {me})")
-    return (text + "\nIf bridge_send answers with an error, do not call it again: say so in your answer.\n"
+        lines.append(f"Reply with the send tool of the diaulos MCP server, to={to}  (you are {me})")
+    return (text + "\nIf send answers with an error, do not call it again: say so in your answer.\n"
             + "\n".join(lines))
 
 
@@ -137,19 +168,6 @@ def take_cut(suffix):
     return True
 
 
-def stop_reason(reply, suffix, lim):
-    """"price cap", "turn limit" or None for the turn that gave `reply`: vibe's stop text, or
-    a session cost at or above the cap (vibe counts the cost of this vibe-acp process)."""
-    if PRICE_LIMIT_TEXT in reply:
-        return "price cap"
-    cost = _cost_value(suffix)
-    if cost is not None and cost >= lim["max_price"]:
-        return "price cap"
-    if TURN_LIMIT_TEXT in reply:
-        return "turn limit"
-    return None
-
-
 def tell_cut(msgs, me, reason, lim):
     """Write the cut file and tell each sender, with a [bridge, not an agent] note."""
     write_cut(me.split(":", 1)[-1], reason)
@@ -168,13 +186,36 @@ def _inflight_path(suffix):
     return os.path.join(folder, f"{suffix}.json")
 
 
-def write_inflight(suffix, session, claimed, role):
+def write_inflight(suffix, session, claimed, role, entry_id=None):
     path = _inflight_path(suffix)
     tmp = f"{path}.{os.getpid()}.tmp"
+    record = {"pid": os.getpid(), "role": role, "session": session, "at": time.time(),
+              "paths": [p for p, _ in claimed]}
+    if entry_id:
+        record["entry_id"] = entry_id
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"pid": os.getpid(), "role": role, "session": session, "at": time.time(),
-                   "paths": [p for p, _ in claimed]}, f)
+        json.dump(record, f)
     os.replace(tmp, path)
+
+
+def session_holds(session, entry_id):
+    """True if the journal of vibe session `session` holds an entry `entry_id` (§8.9.7)."""
+    vs = _core()._vibe()
+    if not vs.suffix_of(session) or not entry_id:
+        return False
+    needle = json.dumps(entry_id)
+    folder = os.path.join(vs.save_dir(), "unified", session, "journal")
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return False
+    for name in names:
+        if name.endswith(".jsonl"):
+            with contextlib.suppress(OSError):
+                with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as f:
+                    if any(needle in line for line in f):
+                        return True
+    return False
 
 
 def clear_inflight(suffix):
@@ -196,6 +237,9 @@ def recover_inflight(suffix, quiet=False):
         return 0
     if not isinstance(record, dict) or core._alive(record.get("pid")):
         return 0
+    if session_holds(record.get("session"), record.get("entry_id")):
+        clear_inflight(suffix)  # the relay died after vibe took the entry: delivered
+        return 0
     archive = core._dir("archive", f"vibe:{suffix}")
     paths = [p for p in record.get("paths") or []
              if isinstance(p, str) and os.path.dirname(os.path.abspath(p)) == os.path.abspath(archive)
@@ -208,128 +252,84 @@ def recover_inflight(suffix, quiet=False):
     return len(paths)
 
 
-# ---------------------------------------------------------------- ACP client
+# ---------------------------------------------------------------- vibe -p (§8.3)
 
-class AcpError(Exception):
+class RunError(Exception):
     pass
 
 
-class Acp:
-    """One vibe-acp process, newline-delimited JSON-RPC on its stdin/stdout."""
+ALREADY_OPEN = "Session is already open"
 
-    def __init__(self, cwd, env):
-        core = _core()
-        binary = core._vibe_acp_bin()
-        if not binary:
-            raise AcpError("the vibe-acp command is not installed or not on PATH")
+
+def vibe_bin():
+    """Path of the real `vibe` command, or None. Hooks and MCP servers may run with a short PATH."""
+    import shutil
+    found = os.environ.get("AGENT_BRIDGE_VIBE_REAL") or shutil.which("vibe")
+    if found:
+        return found
+    path = os.path.expanduser("~/.local/bin/vibe")
+    return path if os.access(path, os.X_OK) else None
+
+
+def run_p(cwd, env, text, lim, resume=None):
+    """One `vibe -p` run: the prompt from a file, vibe's own price and turn caps, export.json read
+    back. Returns (export dict, stderr text). Raises RunError if vibe did not run the prompt."""
+    binary = vibe_bin()
+    if not binary:
+        raise RunError("the vibe command is not installed or not on PATH")
+    core = _core()
+    work = core._path("state", "vibe-run-%d-%d" % (os.getpid(), time.time_ns()))
+    os.makedirs(work)
+    try:
+        prompt = os.path.join(work, "prompt.txt")
+        with open(prompt, "w", encoding="utf-8") as f:
+            f.write(text)
+        argv = [binary, "--prompt-file", prompt, "--max-price", str(lim["max_price"]),
+                "--max-turns", str(lim["max_turns"]), "--output", "json", "--output-dir", work]
+        argv += ["--resume", resume] if resume else ["--workdir", cwd]
         try:
-            self.proc = subprocess.Popen([binary], cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=sys.stderr, text=True, encoding="utf-8", errors="replace",
-                                         bufsize=1)
-        except OSError as e:
-            raise AcpError(f"could not start vibe-acp: {e!r}")
-        self.inbox = queue.Queue()
-        self.next_id = 0
-        self.text = []
-        self.permissions = []
-        threading.Thread(target=self._read, daemon=True).start()
-
-    def _read(self):
-        try:
-            for line in self.proc.stdout:
-                line = line.strip()
-                if line:
-                    try:
-                        self.inbox.put(json.loads(line))
-                    except ValueError:
-                        continue
-        finally:
-            self.inbox.put(None)  # end of stream
-
-    def _write(self, msg):
-        try:
-            self.proc.stdin.write(json.dumps(msg) + "\n")
-            self.proc.stdin.flush()
-        except (OSError, ValueError) as e:
-            raise AcpError(f"vibe-acp closed its input: {e!r}")
-
-    def _on_request(self, msg):
-        if msg.get("method") == "session/request_permission":
-            options = (msg.get("params") or {}).get("options") or []
-            reject = next((o for o in options if o.get("kind") == "reject_once"), None)
-            outcome = ({"outcome": "selected", "optionId": reject["optionId"]} if reject
-                       else {"outcome": "cancelled"})
-            self.permissions.append(outcome.get("optionId") or "cancelled")
-            print(f"{_now()} permission asked by vibe: answered {self.permissions[-1]}", flush=True)
-            self._write({"jsonrpc": "2.0", "id": msg["id"], "result": {"outcome": outcome}})
-        else:
-            self._write({"jsonrpc": "2.0", "id": msg["id"],
-                         "error": {"code": -32601, "message": "not supported by the bridge"}})
-
-    def _on_update(self, msg):
-        update = (msg.get("params") or {}).get("update") or {}
-        kind = update.get("sessionUpdate")
-        if kind == "agent_message_chunk":
-            self.text.append(str((update.get("content") or {}).get("text") or ""))
-
-    def call(self, method, params, timeout=120):
-        self.next_id += 1
-        rid = self.next_id
-        self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
-        deadline = time.time() + timeout
-        while True:
-            try:
-                msg = self.inbox.get(timeout=max(0.0, deadline - time.time()))
-            except queue.Empty:
-                raise AcpError(f"{method}: no answer in {timeout} s")
-            if msg is None:
-                code = self.proc.wait()
-                raise AcpError(f"vibe-acp exited with code {code} during {method}")
-            if "method" in msg and "id" in msg:
-                self._on_request(msg)
-            elif msg.get("method") == "session/update":
-                self._on_update(msg)
-            elif msg.get("id") == rid:
-                if "error" in msg:
-                    err = msg["error"] or {}
-                    raise AcpError(f"{method}: error {err.get('code')} {err.get('message')}")
-                return msg.get("result") or {}
-
-    def start(self):
-        self.call("initialize", {"protocolVersion": 1, "clientCapabilities": {},
-                                 "clientInfo": {"name": "diaulos", "version": "1"}})
-
-    def prompt(self, session, text, max_turns):
-        """One turn. Returns the reply text (the agent's message chunks)."""
-        self.call("session/set_config_option", {"sessionId": session, "configId": "max_turns",
-                                                "value": str(max_turns)})
-        self.text = []
-        self.call("session/prompt", {"sessionId": session, "prompt": [{"type": "text", "text": text}]},
-                  timeout=_core().CLI_TURN_SECONDS)
-        return "".join(self.text)
-
-    def close(self):
-        with contextlib.suppress(OSError, ValueError):
-            self.proc.stdin.close()
-        try:
-            self.proc.wait(15)
+            proc = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.PIPE, timeout=core.CLI_TURN_SECONDS)
         except subprocess.TimeoutExpired:
-            self.proc.terminate()
-            try:
-                self.proc.wait(5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait()
+            raise RunError("vibe -p ran longer than %d s" % core.CLI_TURN_SECONDS)
+        except OSError as e:
+            raise RunError("could not start vibe: %r" % (e,))
+        err = proc.stderr.decode("utf-8", "replace")
+        export = None
         with contextlib.suppress(OSError, ValueError):
-            self.proc.stdout.close()
+            with open(os.path.join(work, "export.json"), encoding="utf-8") as f:
+                export = json.load(f)
+        if ALREADY_OPEN in err:
+            raise RunError(ALREADY_OPEN)
+        if not isinstance(export, dict) or not export.get("session_id"):
+            last = [l for l in err.splitlines() if l.strip()][-1:] or ["no export.json"]
+            raise RunError("vibe -p exited %d: %s" % (proc.returncode, last[0][:200]))
+        return export, err
+    finally:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
 
 
-def _env(lim, me=None, suffix=None):
-    env = dict(os.environ, AGENT_BRIDGE_HOME=_core().HOME, AGENT_BRIDGE_VIBE_MAX_PRICE=str(lim["max_price"]))
-    env.pop("AGENT_BRIDGE_VIBE_SUFFIX", None)
-    env.pop("AGENT_BRIDGE_ADDRESS", None)
-    if suffix:
-        env["AGENT_BRIDGE_VIBE_SUFFIX"] = suffix
+def cut_of(export):
+    """"price cap", "turn limit" or None, from export.json's outcome."""
+    outcome = str(export.get("outcome") or "")
+    if "price" in outcome:
+        return "price cap"
+    if "turn" in outcome:
+        return "turn limit"
+    return None
+
+
+def cost_of(export):
+    cost = export.get("cost_usd")
+    return "$%.4f" % cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else "unknown"
+
+
+def _env(me=None):
+    """vibe -p's environment: AGENT_BRIDGE_VIBE_RUN tells the plugin's hooks that vibe-run delivers."""
+    env = dict(os.environ, AGENT_BRIDGE_HOME=_core().HOME, AGENT_BRIDGE_VIBE_RUN="1")
+    for key in ("AGENT_BRIDGE_ADDRESS", "VIBE_APP_SERVER_CMD", "VIBE_APP_SERVER_BIN", "VIBE_APP_SERVER_CWD"):
+        env.pop(key, None)
     if me:
         env["AGENT_BRIDGE_ADDRESS"] = me  # `bridge.py send` from vibe's bash tool
     return env
@@ -340,27 +340,10 @@ def _tell(to, text, sender):
         _core().send(to, "[bridge, not an agent] " + text, sender)
 
 
-def _cost_value(suffix):
-    """stats.session_cost of the conversation's current session, from its meta.json: for a
-    loaded session, vibe counts the current process only (probe vibe-acp A4). None if unknown."""
-    with contextlib.suppress(Exception):
-        conv = _core()._vibe().conversation(suffix)
-        with open(os.path.join(conv["session_dir"], "meta.json"), encoding="utf-8") as f:
-            cost = (json.load(f).get("stats") or {}).get("session_cost")
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-            return cost
-    return None
-
-
-def _cost(suffix):
-    cost = _cost_value(suffix)
-    return "unknown" if cost is None else f"${cost:.4f}"
-
-
 # ---------------------------------------------------------------- vibe-run
 
 def vibe_run(suffix):
-    """Deliver the inbox of a closed vibe conversation, one ACP turn per batch, then exit."""
+    """Deliver the inbox of a closed vibe conversation, one `vibe -p --resume` run per batch, then exit."""
     core = _core()
     vs = core._vibe()
     if not vs.SUFFIX_RE.match(suffix):
@@ -368,24 +351,23 @@ def vibe_run(suffix):
     me = f"vibe:{suffix}"
     lock = core._path("state", f"vibe-{suffix}")
     with core._locked(lock, wait=1.0):
-        peer = core._read_peer(me) or {}
-        if core._vibe_tui_alive(peer):
+        if core._vibe_tui_alive(me):
             print(f"{_now()} a vibe TUI serves {me}: nothing to do", flush=True)
             return
-        other = peer.get("runner_pid")
+        other = (core._read_peer(me) or {}).get("runner_pid")
         if other != os.getpid() and core._alive(other):
             return
         core._update_peer(me, runner_pid=os.getpid())
         recover_inflight(suffix)
     lim = limits()
     print(f"{_now()} vibe-run {me} pid {os.getpid()}: max_turns {lim['max_turns']}, "
-          f"price cap ${lim['max_price']} (plugin), {lim['attempts']} attempts", flush=True)
-    failures, acp, session = {}, None, None
+          f"price cap ${lim['max_price']} per run, {lim['attempts']} attempts", flush=True)
+    failures = {}
     try:
         while True:
             time.sleep(core.POLL_SECONDS)  # let a burst of messages go in one turn
             with core._locked(lock, wait=1.0):
-                if core._vibe_tui_alive(core._read_peer(me) or {}):
+                if core._vibe_tui_alive(me):
                     print(f"{_now()} a vibe TUI opened {me}: it takes over", flush=True)
                     return
                 claimed = core.claim(me)
@@ -398,32 +380,24 @@ def vibe_run(suffix):
             error = None
             try:
                 if conv is None:
-                    raise AcpError(f"no saved vibe session ends with {suffix}")
-                if acp is None or session != conv["session"]:
-                    if acp is not None:
-                        acp.close()
-                    workspace = conv.get("workspace")
-                    cwd = workspace if workspace and os.path.isdir(workspace) else os.path.expanduser("~")
-                    acp = Acp(cwd, _env(lim, me, suffix))
-                    acp.start()
-                    session = conv["session"]
-                    acp.call("session/load", {"sessionId": session, "cwd": cwd, "mcpServers": []})
-                reply = acp.prompt(session, incoming_text([m for _, m in claimed], me), lim["max_turns"])
-            except AcpError as e:
+                    raise RunError(f"no saved vibe session ends with {suffix}")
+                workspace = conv.get("workspace")
+                cwd = workspace if workspace and os.path.isdir(workspace) else os.path.expanduser("~")
+                export, _ = run_p(cwd, _env(me), incoming_text([m for _, m in claimed], me), lim,
+                                  resume=conv["session"])
+            except RunError as e:
                 error = str(e)
-                if acp is not None:
-                    acp.close()
-                acp, session = None, None
+            if error == ALREADY_OPEN:  # the TUI came back: the messages wait for it
+                core.unclaim(me, claimed)
+                clear_inflight(suffix)
+                print(f"{_now()} {me} is open in a vibe TUI again: {ids} wait for it", flush=True)
+                return
             if error is None:
                 clear_inflight(suffix)
-                reason = stop_reason(reply, suffix, lim)
-                if reason == "price cap":
-                    print(f"{_now()} stopped at price cap ${lim['max_price']}: {ids} to {me} in session {session}; "
-                          f"session_cost {_cost(suffix)}", flush=True)
-                else:
-                    limit = " (turn limit reached)" if reason else ""
-                    print(f"{_now()} delivered {ids} to {me} in session {session} with vibe-acp{limit}; "
-                          f"session_cost {_cost(suffix)}", flush=True)
+                reason = cut_of(export)
+                limit = f" (stopped at the {reason})" if reason else ""
+                print(f"{_now()} delivered {ids} to {me} in session {export.get('session_id')} with vibe -p{limit}; "
+                      f"cost {cost_of(export)}", flush=True)
                 if reason:
                     tell_cut([m for _, m in claimed], me, reason, lim)
                 failures.clear()
@@ -443,10 +417,8 @@ def vibe_run(suffix):
             print(f"{_now()} dropped {ids} after {lim['attempts']} attempts: {error}", flush=True)
             for m in [m for _, m in claimed]:
                 _tell(m["from"], f"Your message {m['id']} to {me} was not delivered after {lim['attempts']} "
-                      f"attempts with vibe-acp ({error}). It is kept as .failed; it is not sent again.", me)
+                      f"attempts with vibe -p ({error}). It is kept as .failed; it is not sent again.", me)
     finally:
-        if acp is not None:
-            acp.close()
         with core._locked(lock, wait=1.0):
             if (core._read_peer(me) or {}).get("runner_pid") == os.getpid():
                 core._update_peer(me, runner_pid=None)
@@ -455,7 +427,7 @@ def vibe_run(suffix):
 # ---------------------------------------------------------------- vibe-new
 
 def vibe_new():
-    """Start one vibe conversation per message sent to vibe:new, then exit."""
+    """Start one vibe conversation per message sent to vibe:new (`vibe -p --workdir`), then exit."""
     core = _core()
     new = core.VIBE_NEW
     with core._locked(core._path("state", "vibe-new"), wait=0.5):
@@ -474,44 +446,34 @@ def vibe_new():
             options = msg.get("new") if isinstance(msg.get("new"), dict) else {}
             workspace, name = options.get("workspace"), options.get("name")
             cwd = workspace if workspace and os.path.isdir(workspace) else os.path.expanduser("~")
-            acp, address, session, error, reply = None, None, None, None, ""
+            export, error = None, None
             try:
-                acp = Acp(cwd, _env(lim))
-                acp.start()
-                session = acp.call("session/new", {"cwd": cwd, "mcpServers": []}).get("sessionId")
-                suffix = core._vibe().suffix_of(session)
-                if not suffix:
-                    raise AcpError(f"session/new gave no vibe session id ({session!r})")
-                address = f"vibe:{suffix}"
-                fields = {"session": session}
-                if name:
-                    fields["aliases"] = [f"vibe:{name}"]
-                core._update_peer(address, **fields)
-                reply = acp.prompt(session, incoming_text([msg], address), lim["max_turns"])
-            except AcpError as e:
+                # The address is known only from export.json: the first turn names the sender vibe:new.
+                export, _ = run_p(cwd, _env(), incoming_text([msg], new), lim)
+            except RunError as e:
                 error = str(e)
             except Exception as e:  # a bug here must not lose the message: back to the inbox
-                if acp is not None:
-                    acp.close()
                 core.unclaim(new, claimed)
                 clear_inflight("new")
                 print(f"{_now()} vibe:new for {msg['id']} stopped by {e!r}; message put back", flush=True)
                 raise
-            if acp is not None:
-                acp.close()
             clear_inflight("new")
-            if error:
+            session = export.get("session_id") if export else None
+            suffix = core._vibe().suffix_of(session)
+            if error or not suffix:
+                error = error or f"vibe -p gave no vibe session id ({session!r})"
                 with contextlib.suppress(OSError):
                     os.rename(path, path + ".failed")
                 print(f"{_now()} vibe:new for {msg['id']} failed: {error}", flush=True)
-                started = f" The conversation {address} was created, but its first turn failed." if address else ""
-                _tell(msg["from"], f"Your message {msg['id']} to {new} failed: {error}.{started}", address or new)
+                _tell(msg["from"], f"Your message {msg['id']} to {new} failed: {error}.", new)
                 continue
-            reason = stop_reason(reply, suffix, lim)
-            limit = {"price cap": f" (stopped at price cap ${lim['max_price']})",
-                     "turn limit": " (turn limit reached)"}.get(reason, "")
+            address = f"vibe:{suffix}"
+            if name:
+                core._update_peer(address, session=session, aliases=[f"vibe:{name}"])
+            reason = cut_of(export)
+            limit = f" (stopped at the {reason})" if reason else ""
             print(f"{_now()} started {address} (session {session}) for {msg['id']} from {msg['from']}{limit}; "
-                  f"session_cost {_cost(suffix)}", flush=True)
+                  f"cost {cost_of(export)}", flush=True)
             if reason:
                 tell_cut([msg], address, reason, lim)
             named = f", also reachable as vibe:{name}" if name else ""

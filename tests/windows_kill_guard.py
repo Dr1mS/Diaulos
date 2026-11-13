@@ -4,7 +4,7 @@ On Windows, signal 0 is CTRL_C_EVENT: os.kill(pid, 0) sends Ctrl-C to the whole 
 stops the test run with KeyboardInterrupt (Windows CI run of 12 Nov. 2026). This guard finds
 such a call in the tests that also run on Windows, without a Windows machine:
 
-    cd tests && python3 windows_kill_guard.py test_mailbox test_vibe_fakes test_vibe_plugin
+    cd tests && python3 windows_kill_guard.py test_mailbox test_vibe_sessions test_vibe_runner
 """
 import os
 import sys

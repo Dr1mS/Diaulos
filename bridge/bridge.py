@@ -23,7 +23,7 @@ Addresses:
 `agy:new@<title>` also names it;
 `agy:new-cli` and `agy:new-cli@<name>` start a new agy CLI conversation (agy -p);
 `vibe:<name>` picks a vibe conversation by its /rename title; `vibe:new` and
-`vibe:new@<name>` start a new vibe conversation (vibe-acp);
+`vibe:new@<name>` start a new vibe conversation (vibe -p);
 `<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
 agy sessions can message each other the same way.
 
@@ -40,7 +40,7 @@ Usage:
   bridge.py agy-relay [--probe TEXT | --inspect]   relay loop / one-off tests (agy shell only)
   bridge.py cli-run <conversationId>               deliver to a sleeping agy CLI conversation (internal)
   bridge.py cli-new                                start the conversations asked from agy:new-cli (internal)
-  bridge.py vibe-run <suffix>                      deliver to a closed vibe conversation with vibe-acp (internal)
+  bridge.py vibe-run <suffix>                      deliver to a closed vibe conversation with vibe -p (internal)
   bridge.py vibe-new                               start the conversations asked from vibe:new (internal)
   bridge.py remote <command>                       pair machines and run the gateway (see remote.py)
 """
@@ -73,8 +73,7 @@ AUTO_SCAN_SECONDS = 10  # auto-relay: how often listing agy peers looks for lang
 RECENT_DAYS = 7  # Desktop conversations modified this recently are reachable even when not loaded
 NEW = "agy:new"  # inbox read by Desktop relays: each message there starts a new conversation
 NEW_CLI = "agy:new-cli"  # each message there starts a new agy CLI conversation with agy -p
-VIBE_NEW = "vibe:new"  # each message there starts a new vibe conversation with vibe-acp
-VIBE_BEAT_SECONDS = 60  # a vibe TUI plugin writes its heartbeat every 10 s: older means gone
+VIBE_NEW = "vibe:new"  # each message there starts a new vibe conversation with vibe -p
 CLI_DIR = AGY_DIRS[0]  # agy CLI data: its index of conversations
 CLI_TURN_SECONDS = 1800  # --print-timeout of one headless agy CLI turn
 CLI_ARG_MAX = 100_000  # a message goes to agy -p as one argument: stay under Linux's 128 KiB per argument
@@ -380,11 +379,13 @@ def _agy_title(conversation):
 
 
 # ---------------------------------------------------------------- vibe
-# Mistral Vibe conversations (docs/VIBE-DESIGN.md). A conversation is every session
-# with one 12-hex suffix; vibe_sessions.py reads them from vibe's save_dir. Its peer
-# file peers/vibe-<suffix>.json has one field per role, each written by that role only:
-# tui_pid and tui_seen (the plugin in a vibe TUI), runner_pid (vibe-run), acp_pid
-# (its vibe-acp), plus the plugin's session, workspace, name, paused, wake, version.
+# Mistral Vibe 3 conversations (docs/VIBE-DESIGN.md §8). A conversation is every session
+# with one 12-hex suffix; vibe_sessions.py reads them from vibe's save_dir. A live TUI is
+# known from two state files (vibe_sessions.py): state/vibe-relay/<pid>.json, written by the
+# relay of a TUI opened with vibe-diaulos (it wakes the conversation), and
+# state/vibe-current/<app-server pid>.json, written by the plugin's session_start hook in any
+# TUI or `vibe -p` (`run`). The peer file peers/vibe-<suffix>.json keeps runner_pid
+# (vibe-run) and the aliases of vibe:new@<name>.
 
 def _load_sibling(module_name, file_name):
     """A module next to this file, loaded by path under `module_name`, never through
@@ -415,26 +416,30 @@ def _vibe_runner():
     return _load_sibling("agent_bridge_vibe_runner", "vibe_runner.py")
 
 
-def _vibe_acp_bin():
-    """Path of the vibe-acp command, or None. Hooks and MCP servers may run with a short PATH."""
-    import shutil
-    found = shutil.which("vibe-acp")
-    if found:
-        return found
-    for fallback in ("~/.local/bin/vibe-acp", "~/.local/share/uv/tools/mistral-vibe/bin/vibe-acp"):
-        path = os.path.expanduser(fallback)
-        if os.access(path, os.X_OK):
-            return path
-    return None
+def _vibe_bin():
+    return _vibe_runner().vibe_bin()
 
 
-def _vibe_tui_alive(peer):
-    return _alive(peer.get("tui_pid")) and time.time() - peer.get("tui_seen", 0) < VIBE_BEAT_SECONDS
+def _vibe_live():
+    """{suffix: "relay" | "off" | "tui"} of the conversations open in a live vibe TUI: with a relay
+    that wakes it, with a relay whose waking is off, or with no relay (opened with the real vibe)."""
+    found = {}
+    with contextlib.suppress(Exception):
+        for suffix, record in _vibe().live_currents().items():
+            if not record.get("run"):
+                found[suffix] = "tui"
+        for suffix, record in _vibe().live_relays().items():
+            found[suffix] = "off" if record.get("wake") == "off" else "relay"
+    return found
+
+
+def _vibe_tui_alive(address):
+    return address[5:] in _vibe_live()
 
 
 def _vibe_recover():
-    """Put back in their inbox the messages of in-flight records left by a dead vibe plugin,
-    vibe-run or vibe-new (docs/VIBE-DESIGN.md §4.2): a killed vibe never loses a message."""
+    """Put back in their inbox the messages of in-flight records left by a dead relay, vibe-run or
+    vibe-new (docs/VIBE-DESIGN.md §4.2, §8.9.7): a killed vibe never loses a message."""
     try:
         names = os.listdir(_path("state", "vibe-inflight"))
     except OSError:
@@ -455,13 +460,21 @@ def _vibe_recover():
 def _vibe_peers(days=RECENT_DAYS):
     """vibe conversations saved in the last `days` (None: all), and live ones not saved yet.
 
-    A conversation whose TUI, vibe-run or vibe-acp runs is listed whatever its age.
+    A conversation open in a TUI, or served by vibe-run, is listed whatever its age.
     """
     _vibe_recover()
     found = {}
     with contextlib.suppress(Exception):  # an unreadable vibe setup must not break `list`
         for c in _vibe().conversations(days).values():
             found[c["address"]] = dict(c)
+    live = _vibe_live()
+    for suffix in live:
+        address = "vibe:" + suffix
+        if address not in found:
+            entry = {"address": address, "suffix": suffix}
+            with contextlib.suppress(Exception):
+                entry.update(_vibe().conversation(suffix) or {})
+            found[address] = entry
     os.makedirs(_path("peers"), exist_ok=True)
     for name in sorted(os.listdir(_path("peers"))):
         if not (name.startswith("vibe-") and name.endswith(".json")) or name == _name(VIBE_NEW) + ".json":
@@ -474,50 +487,39 @@ def _vibe_peers(days=RECENT_DAYS):
         address = peer.get("address")
         if not (isinstance(address, str) and ADDRESS_RE.match(address) and address.startswith("vibe:")):
             continue
-        tui, runner, acp = _vibe_tui_alive(peer), _alive(peer.get("runner_pid")), _alive(peer.get("acp_pid"))
+        runner = _alive(peer.get("runner_pid"))
         entry = found.get(address)
         if entry is None:
-            if not (tui or runner or acp):
-                if days is not None or not peer.get("aliases"):
-                    continue
+            if not runner and (days is not None or not peer.get("aliases")):
+                continue
             entry = {"address": address, "suffix": address[5:]}
             with contextlib.suppress(Exception):
                 entry.update(_vibe().conversation(address[5:]) or {})
-        if tui:
-            for key in ("session", "workspace", "name", "paused", "wake", "version"):
-                if peer.get(key) is not None:
-                    entry[key] = peer[key]
+            found[address] = entry
         if peer.get("aliases"):
             entry["aliases"] = peer["aliases"]
             if not entry.get("name"):
                 entry["name"] = next((a[5:] for a in peer["aliases"] if a.startswith("vibe:")), None)
-        entry.update(tui_alive=tui, runner_alive=runner, acp_alive=acp, tui_pid=peer.get("tui_pid"),
-                     runner_pid=peer.get("runner_pid"), price_cap=peer.get("price_cap"))
-        found[address] = entry
+        entry["runner_alive"] = runner
     for entry in found.values():
-        entry.setdefault("tui_alive", False)
+        entry["wake"] = live.get(entry["suffix"])
+        entry["tui_alive"] = entry["wake"] is not None
         entry.setdefault("runner_alive", False)
-        entry.setdefault("acp_alive", False)
-        entry["relay_alive"] = False
+        entry["relay_alive"] = entry["wake"] == "relay"
         entry["process_alive"] = entry["tui_alive"]
     return sorted(found.values(), key=lambda p: p["address"])
 
 
 def _describe_vibe(peer):
-    if peer["tui_alive"] and peer.get("wake") == "none":
-        how = f"TUI, no injection (vibe {peer.get('version') or '?'}): waits until vibe exits"
-    elif peer["tui_alive"] and peer.get("paused"):
-        how = "TUI, paused (Esc): delivers after Enter"
-    elif peer["tui_alive"]:
-        how = "TUI: wakes on message"
-    elif peer["runner_alive"]:
+    how = {"relay": "TUI: wakes on message",
+           "off": "TUI: relay stopped waking (3 failures), delivers at next message",
+           "tui": "TUI: no relay, delivers at next message"}.get(peer.get("wake"))
+    if how is None and peer["runner_alive"]:
         how = "background turn running (vibe-run)"
-    elif _vibe_acp_bin():
-        how = "closed: wakes with vibe-acp"
-    else:
-        how = "closed: waits until reopened (no vibe-acp)"
-    if peer.get("price_cap") is False and not peer["tui_alive"]:
-        how += ", price cap not set, max_turns only"
+    elif how is None and _vibe_bin():
+        how = "closed: wakes with vibe -p"
+    elif how is None:
+        how = "closed: waits until reopened (no vibe command)"
     label = peer.get("name") or re.sub(r'[\s"]+', " ", peer.get("title") or "").strip()[:60]
     name = f"  \"{label}\"" if label else ""
     return f"{peer['address']}{name}  {peer.get('workspace') or '?'}  {how}"
@@ -525,13 +527,13 @@ def _describe_vibe(peer):
 
 def _wake_vibe(address):
     """Start vibe-run for `address` if its conversation is closed and has messages: one at a time,
-    never while a vibe TUI serves it."""
+    never while a vibe TUI holds it (its relay, or its pre_agent hook, delivers)."""
     suffix = address[5:]
-    if not _vibe().SUFFIX_RE.match(suffix) or not _vibe_acp_bin():
+    if not _vibe().SUFFIX_RE.match(suffix) or not _vibe_bin():
         return
     with _locked(_path("state", f"vibe-{suffix}")):
         peer = _read_peer(address) or {}
-        if _vibe_tui_alive(peer) or _alive(peer.get("runner_pid")) or not _pending(address):
+        if _vibe_tui_alive(address) or _alive(peer.get("runner_pid")) or not _pending(address):
             return
         pid = _spawn_detached([sys.executable, "-u", SCRIPT, "vibe-run", suffix], f"vibe-{suffix}.log")
         _update_peer(address, runner_pid=pid)
@@ -581,9 +583,9 @@ def resolve(to, sender=None):
     if kind not in ("agy", "claude", "ext", "vibe"):
         sys.exit(f"unknown recipient {to!r}")
     if to == VIBE_NEW or to.startswith(VIBE_NEW + "@"):
-        if _vibe_acp_bin():
+        if _vibe_bin():
             return VIBE_NEW
-        sys.exit(f"{VIBE_NEW}: the vibe-acp command is not installed or not on PATH")
+        sys.exit(f"{VIBE_NEW}: the vibe command is not installed or not on PATH")
     if to == NEW_CLI or to.startswith(NEW_CLI + "@"):
         if _agy_bin():
             return NEW_CLI

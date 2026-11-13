@@ -1,33 +1,41 @@
-"""install.sh and uninstall.sh for Mistral Vibe (install/vibe_install.py, docs/VIBE-DESIGN.md §5, task T4).
+"""install.sh and uninstall.sh for Mistral Vibe 3 (install/vibe_install.py, docs/VIBE-DESIGN.md §8.2,
+§8.7, §8.9.3, task T14).
 
-In a temporary HOME (and VIBE_HOME), with a PATH that has no `claude`: install, run vibe
-once so that tools/__pycache__ exists, uninstall, then `diff -r` against the copy of
-VIBE_HOME made before the install must be empty. "Run vibe once" is vibe's own tool loader
-(ToolManager._load_tools_from_file) in vibe's Python, which imports the shim as vibe does
-at start, without a model call. The files vibe writes for itself at start go to another
-VIBE_HOME, so the diff only sees what the installer and the shim's import leave.
+In a temporary HOME and VIBE_HOME, with a PATH that has no `claude` and a fake `vibe` whose
+`--version` says FAKE_VERSION: install, check the plugin, the config.toml block and vibe-diaulos,
+uninstall, then `diff -r` against the copy of VIBE_HOME made before the install. The only file
+left is the backup config.toml.bak-agent-bridge (every edited file is backed up first, and the
+backup stays); config.toml itself is the same, byte for byte.
 Linux and macOS only (bash).
 """
-import ast
 import contextlib
 import importlib.util
 import io
 import json
 import os
-import py_compile
 import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
 from helpers import ROOT, WINDOWS
 
-VIBE_PYTHON = os.path.expanduser("~/.local/share/uv/tools/mistral-vibe/bin/python")
-RESTART_VIBE = "Restart open vibe TUIs so they load the bridge tools."
 RERUN = "If you install vibe later, run this installer again."
-LOAD = ("import sys; from pathlib import Path; from vibe.core.tools.manager import ToolManager; "
-        "t = ToolManager._load_tools_from_file(Path(sys.argv[1])); print(sorted(x.get_name() for x in t))")
+BACKUP = "config.toml.bak-agent-bridge"
+CONFIG = ('active_model = "devstral-small"\n\n[[mcp_servers]]\nname = "other"\ntransport = "stdio"\n'
+          'command = "other-server"\n')
+SHIM = '"""Diaulos tools for Mistral Vibe (vibe 2.20)."""\n'
 OTHER = "# someone else's vibe tool\nprint('mine')\n"
+
+
+def load_installer():
+    spec = importlib.util.spec_from_file_location("vibe_install_under_test",
+                                                  os.path.join(ROOT, "install", "vibe_install.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @unittest.skipIf(WINDOWS, "bash installers")
@@ -46,126 +54,179 @@ class VibeInstallTest(unittest.TestCase):
                 os.symlink(path, os.path.join(self.bin, tool))
         self.env = {"HOME": self.home, "PATH": self.bin, "LANG": "C.UTF-8"}
         self.bridge_home = os.path.join(self.home, ".agent-bridge")
+        self.vibe_home = os.path.join(self.home, ".vibe")
 
-    def run_script(self, name, *args, env=None):
+    def fake_vibe(self, version="3.1.2"):
+        """A `vibe` console script on PATH: its #! line names a Python, as uv's does."""
+        path = os.path.join(self.bin, "vibe")
+        with open(path, "w") as f:
+            f.write("#!%s\nprint('vibe %s')\n" % (sys.executable, version))
+        os.chmod(path, 0o755)
+
+    def run_script(self, name, *args, env=None, check=True):
         proc = subprocess.run(["/bin/bash", os.path.join(ROOT, name), *args], capture_output=True, text=True,
                               env=dict(self.env, **(env or {})), timeout=60)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        if check:
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         return proc.stdout
 
-    def snapshot(self, vibe_home):
+    def snapshot(self):
         copy = os.path.join(self.tmp, "before")
-        if os.path.exists(vibe_home):
-            shutil.copytree(vibe_home, copy, symlinks=True)
+        if os.path.exists(self.vibe_home):
+            shutil.copytree(self.vibe_home, copy, symlinks=True)
         return copy
 
-    def run_vibe_once(self, vibe_home):
-        """Import the installed shim as vibe does; tools/__pycache__ then holds its .pyc."""
-        shim = os.path.join(vibe_home, "tools", "agent_bridge.py")
-        if os.path.exists(VIBE_PYTHON):
-            # vibe's own start files (trusted_folders.toml, logs/) are vibe's, not the installer's:
-            # they go to a separate VIBE_HOME. The .pyc still lands next to the shim, in tools/__pycache__.
-            own = os.path.join(self.tmp, "vibe-own-files")
-            proc = subprocess.run([VIBE_PYTHON, "-c", LOAD, shim], capture_output=True, text=True,
-                                  env=dict(self.env, VIBE_HOME=own), timeout=120)
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("['bridge_list_agents', 'bridge_send']", proc.stdout)
-        else:  # vibe not installed here: write the .pyc its import would leave
-            py_compile.compile(shim, cfile=importlib.util.cache_from_source(shim), doraise=True)
-        pycache = os.path.join(vibe_home, "tools", "__pycache__")
-        self.assertTrue([n for n in os.listdir(pycache) if n.startswith("agent_bridge")], os.listdir(pycache))
-
-    def assert_same(self, before, vibe_home):
+    def assert_same(self, before, backup_left=True):
         if not os.path.exists(before):
-            if os.path.exists(vibe_home):
-                self.fail(f"{vibe_home} left behind: {os.listdir(vibe_home)}")
+            if os.path.exists(self.vibe_home):
+                self.fail(f"{self.vibe_home} left behind: {os.listdir(self.vibe_home)}")
             return
-        proc = subprocess.run(["diff", "-r", before, vibe_home], capture_output=True, text=True)
-        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stdout)
+        proc = subprocess.run(["diff", "-r", before, self.vibe_home], capture_output=True, text=True,
+                              env=dict(os.environ, LC_ALL="C"))
+        lines = proc.stdout.splitlines()
+        if backup_left:
+            self.assertIn(f"Only in {self.vibe_home}: {BACKUP}", lines)
+            lines.remove(f"Only in {self.vibe_home}: {BACKUP}")
+        self.assertEqual(lines, [], proc.stdout)
 
-    def shim_text(self, vibe_home):
-        with open(os.path.join(vibe_home, "tools", "agent_bridge.py"), encoding="utf-8") as f:
+    def write_config(self, text=CONFIG):
+        os.makedirs(self.vibe_home, exist_ok=True)
+        with open(os.path.join(self.vibe_home, "config.toml"), "w") as f:
+            f.write(text)
+
+    def read(self, *parts):
+        with open(os.path.join(*parts), encoding="utf-8") as f:
             return f.read()
 
-    def test_tools_folder_absent(self):
-        vibe_home = os.path.join(self.home, ".vibe")
-        os.makedirs(vibe_home)
-        with open(os.path.join(vibe_home, "config.toml"), "w") as f:
-            f.write('active_model = "x"\n')
-        before = self.snapshot(vibe_home)
+    # ------------------------------------------------------------------ tests
+
+    def test_install_then_uninstall(self):
+        self.fake_vibe()
+        self.write_config()
+        session = os.path.join(self.vibe_home, "logs", "session", "unified", "aaaa-0123456789ab")
+        os.makedirs(session)
+        with open(os.path.join(session, "meta.json"), "w") as f:
+            f.write("{}\n")
+        before = self.snapshot()
         out = self.run_script("install.sh")
-        self.assertIn("vibe        -> " + os.path.join(vibe_home, "tools", "agent_bridge.py"), out)
-        self.assertIn(RESTART_VIBE, out)
-        self.assertNotIn(RERUN, out)
-        self.assertIn(f"BRIDGE_DIR = {self.bridge_home!r}", self.shim_text(vibe_home))
-        for name in ("vibe_sessions.py", "vibe_runner.py", "vibe_plugin.py"):
+        plugin = os.path.join(self.vibe_home, "plugins", "diaulos")
+        self.assertIn(f"vibe        -> {plugin}", out)
+        self.assertIn("Restart open vibe TUIs", out)
+        # The plugin: launcher filled in and executable, hooks filled in, manifests as in the repository.
+        launcher = self.read(plugin, "vibe-mcp")
+        self.assertNotIn("@BRIDGE_HOME@", launcher)
+        self.assertNotIn("@PYTHON@", launcher)
+        self.assertIn(os.path.join(self.bridge_home, "vibe_mcp.py"), launcher)
+        self.assertTrue(os.stat(os.path.join(plugin, "vibe-mcp")).st_mode & stat.S_IXUSR)
+        hooks = self.read(plugin, "ai.mistral.vibe", "hooks.toml")
+        self.assertNotIn("@HOOK@", hooks)
+        for event in ("session_start", "pre_agent"):
+            self.assertIn(f"{os.path.join(self.bridge_home, 'vibe_hook.py')} {event}", hooks)
+        self.assertNotIn("post_agent", hooks)
+        for name in ("plugin.json", "mcp.json"):
+            self.assertEqual(json.loads(self.read(plugin, name)),
+                             json.loads(self.read(ROOT, "install", "vibe-plugin", name)))
+        self.assertTrue(os.path.exists(os.path.join(plugin, "skills", "diaulos", "SKILL.md")))
+        # The config.toml block, once, after the person's own text; the backup holds that text.
+        config = self.read(self.vibe_home, "config.toml")
+        self.assertTrue(config.startswith(CONFIG), config)
+        self.assertEqual(config.count("[tools.diaulos_send]"), 1)
+        self.assertEqual(config.count("[tools.diaulos_list_agents]"), 1)
+        self.assertEqual(self.read(self.vibe_home, BACKUP), CONFIG)
+        # vibe-diaulos and the bridge files it runs.
+        command = os.path.join(self.bridge_home, "vibe-diaulos")
+        self.assertTrue(os.stat(command).st_mode & stat.S_IXUSR)
+        self.assertIn("vibe_diaulos.py", self.read(command))
+        for name in ("vibe_relay.py", "vibe_diaulos.py", "vibe_mcp.py", "vibe_hook.py", "claude-channel.sh"):
             self.assertTrue(os.path.exists(os.path.join(self.bridge_home, name)), name)
-        with open(os.path.join(self.bridge_home, "state", "vibe-install.json")) as f:
-            state = json.load(f)
-        self.assertEqual(state["created"], [os.path.join(vibe_home, "tools")])
-        self.assertFalse(state["pycache_existed"])
-        self.run_vibe_once(vibe_home)
-        self.run_script("install.sh")  # a re-run (update) keeps what the first install recorded
-        out = self.run_script("uninstall.sh")
-        self.assertIn("removed vibe tools", out)
-        self.assert_same(before, vibe_home)
-        for name in ("vibe_sessions.py", "vibe_runner.py", "vibe_plugin.py", "state/vibe-install.json"):
-            self.assertFalse(os.path.exists(os.path.join(self.bridge_home, name)), name)
-
-    def test_another_agent_bridge_py_is_kept_and_restored(self):
-        vibe_home = os.path.join(self.tmp, "custom-vibe")  # VIBE_HOME outside HOME
-        tools = os.path.join(vibe_home, "tools")
-        os.makedirs(os.path.join(tools, "__pycache__"))
-        with open(os.path.join(tools, "agent_bridge.py"), "w") as f:
-            f.write(OTHER)
-        with open(os.path.join(tools, "other_tool.py"), "w") as f:
-            f.write("x = 1\n")
-        before = self.snapshot(vibe_home)
-        env = {"VIBE_HOME": vibe_home}
-        out = self.run_script("install.sh", env=env)
-        self.assertIn("kept your agent_bridge.py as agent_bridge.py.bak-agent-bridge", out)
-        self.assertIn("Diaulos tools for Mistral Vibe", self.shim_text(vibe_home))
-        self.run_vibe_once(vibe_home)
-        out = self.run_script("install.sh", env=env)  # our own shim is never taken as a backup
-        self.assertNotIn("kept your", out)
-        with open(os.path.join(tools, "agent_bridge.py.bak-agent-bridge")) as f:
-            self.assertEqual(f.read(), OTHER)
-        out = self.run_script("uninstall.sh", env=env)
-        self.assertIn("restored your", out)
-        self.assert_same(before, vibe_home)
-
-    def test_a_vibe_home_with_glob_characters(self):
-        # The .pyc is found with glob: `[` in VIBE_HOME must be taken literally (glob.escape).
-        vibe_home = os.path.join(self.tmp, "vi[b]e home")
-        os.makedirs(os.path.join(vibe_home, "tools", "__pycache__"))
-        before = self.snapshot(vibe_home)
-        env = {"VIBE_HOME": vibe_home}
-        self.run_script("install.sh", env=env)
-        self.run_vibe_once(vibe_home)
-        self.run_script("uninstall.sh", env=env)
-        self.assert_same(before, vibe_home)
+        self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "vibe_plugin.py")))
+        state = json.loads(self.read(self.bridge_home, "state", "vibe-install.json"))
+        self.assertEqual((state["vibe_version"], state["vibe_python"]), ("3.1.2", sys.executable))
+        # Twice: still one block.
+        self.run_script("install.sh")
+        self.assertEqual(self.read(self.vibe_home, "config.toml").count("[tools.diaulos_send]"), 1)
+        self.run_script("uninstall.sh")
+        self.assertFalse(os.path.exists(command))
+        self.assert_same(before)
 
     def test_vibe_on_path_without_vibe_home(self):
-        fake_vibe = os.path.join(self.bin, "vibe")
-        with open(fake_vibe, "w") as f:
-            f.write("#!/bin/sh\nexit 0\n")
-        os.chmod(fake_vibe, 0o755)
-        vibe_home = os.path.join(self.home, ".vibe")
-        before = self.snapshot(vibe_home)
+        self.fake_vibe()
+        before = self.snapshot()
         self.run_script("install.sh")
-        self.assertTrue(os.path.exists(os.path.join(vibe_home, "tools", "agent_bridge.py")))
-        self.run_vibe_once(vibe_home)
+        self.assertTrue(os.path.isdir(os.path.join(self.vibe_home, "plugins", "diaulos")))
         self.run_script("uninstall.sh")
-        self.assert_same(before, vibe_home)
+        self.assert_same(before, backup_left=False)
+
+    def test_vibe_below_3_is_skipped_and_its_shim_removed(self):
+        self.fake_vibe("2.20.0")
+        tools = os.path.join(self.vibe_home, "tools")
+        os.makedirs(tools)
+        before = self.snapshot()
+        with open(os.path.join(tools, "agent_bridge.py"), "w") as f:
+            f.write(SHIM)  # left by the vibe 2.20 installer
+        out = self.run_script("install.sh")
+        self.assertIn("Diaulos needs Mistral Vibe 3 or later: run `vibe update` (found 2.20.0): skipped", out)
+        self.assertIn("removed the vibe 2.20 tools", out)
+        self.assertFalse(os.path.exists(os.path.join(self.vibe_home, "plugins")))
+        self.assertFalse(os.path.exists(os.path.join(self.vibe_home, "config.toml")))
+        self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "vibe-diaulos")))
+        self.run_script("uninstall.sh")
+        self.assert_same(before, backup_left=False)
+
+    def test_the_old_shim_goes_and_the_persons_own_file_comes_back(self):
+        self.fake_vibe()
+        tools = os.path.join(self.vibe_home, "tools")
+        os.makedirs(tools)
+        with open(os.path.join(tools, "agent_bridge.py"), "w") as f:
+            f.write(OTHER)
+        before = self.snapshot()
+        os.replace(os.path.join(tools, "agent_bridge.py"), os.path.join(tools, "agent_bridge.py.bak-agent-bridge"))
+        with open(os.path.join(tools, "agent_bridge.py"), "w") as f:
+            f.write(SHIM)  # the 2.20 install had saved the person's file
+        out = self.run_script("install.sh")
+        self.assertIn("restored your", out)
+        self.assertEqual(self.read(tools, "agent_bridge.py"), OTHER)
+        self.run_script("uninstall.sh")
+        self.assertEqual(self.read(tools, "agent_bridge.py"), OTHER)
+        self.assert_same(before, backup_left=False)
+
+    def test_a_server_named_diaulos_stops_the_vibe_part(self):
+        # vibe would disable the plugin's server (MCP_SERVER_SHADOWED); names compared as vibe normalizes them.
+        self.fake_vibe()
+        self.write_config(CONFIG + '\n[[mcp_servers]]\nname = "diaulos"\ntransport = "stdio"\ncommand = "x"\n')
+        before = self.snapshot()
+        out = self.run_script("install.sh")
+        self.assertIn("Mistral Vibe already has an MCP server named diaulos", out)
+        self.assertIn("MCP_SERVER_SHADOWED", out)
+        self.assertFalse(os.path.exists(os.path.join(self.vibe_home, "plugins")))
+        self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "vibe-diaulos")))
+        self.assert_same(before, backup_left=False)
+
+    def test_a_tools_table_not_ours_stops_the_vibe_part(self):
+        self.fake_vibe()
+        self.write_config(CONFIG + '\n[tools.diaulos_send]\npermission = "ask"\n')
+        before = self.snapshot()
+        out = self.run_script("install.sh")
+        self.assertIn("config.toml already has a [tools.diaulos_send] table", out)
+        self.assert_same(before, backup_left=False)
+
+    def test_a_plugin_folder_not_ours_is_left_alone(self):
+        self.fake_vibe()
+        mine = os.path.join(self.vibe_home, "plugins", "diaulos")
+        os.makedirs(mine)
+        with open(os.path.join(mine, "plugin.json"), "w") as f:
+            json.dump({"name": "diaulos", "description": "someone else's"}, f)
+        before = self.snapshot()
+        out = self.run_script("install.sh")
+        self.assertIn("is not the Diaulos plugin", out)
+        self.run_script("uninstall.sh")
+        self.assert_same(before, backup_left=False)
 
     def test_a_failed_vibe_step_stops_the_installer(self):
-        fake_vibe = os.path.join(self.bin, "vibe")
-        with open(fake_vibe, "w") as f:
-            f.write("#!/bin/sh\nexit 0\n")
-        os.chmod(fake_vibe, 0o755)
+        self.fake_vibe()
         vibe_home = os.path.join(self.tmp, "vibe-is-a-file")
         with open(vibe_home, "w") as f:
-            f.write("x\n")  # vibe on PATH, VIBE_HOME a file: the vibe step cannot create tools/
+            f.write("x\n")  # vibe on PATH, VIBE_HOME a file: the vibe step cannot write in it
         proc = subprocess.run(["/bin/bash", os.path.join(ROOT, "install.sh")], capture_output=True, text=True,
                               env=dict(self.env, VIBE_HOME=vibe_home), timeout=60)
         self.assertNotEqual(proc.returncode, 0, proc.stdout)
@@ -175,40 +236,55 @@ class VibeInstallTest(unittest.TestCase):
     def test_no_vibe_nothing_written(self):
         out = self.run_script("install.sh")
         self.assertIn("vibe        -> not found", out)
-        self.assertIn(RERUN, out)  # vibe installed later: the installer must run again
-        self.assertNotIn(RESTART_VIBE, out)
-        self.assertFalse(os.path.exists(os.path.join(self.home, ".vibe")))
+        self.assertIn(RERUN, out)
+        self.assertFalse(os.path.exists(self.vibe_home))
         self.run_script("uninstall.sh")
-        self.assertFalse(os.path.exists(os.path.join(self.home, ".vibe")))
+        self.assertFalse(os.path.exists(self.vibe_home))
 
     def test_purge_keeps_vibe_sessions(self):
-        vibe_home = os.path.join(self.home, ".vibe")
-        session = os.path.join(vibe_home, "logs", "session", "session_1_abcd")
+        self.fake_vibe()
+        session = os.path.join(self.vibe_home, "logs", "session", "unified", "aaaa-0123456789ab")
         os.makedirs(session)
-        with open(os.path.join(session, "messages.jsonl"), "w") as f:
+        with open(os.path.join(session, "meta.json"), "w") as f:
             f.write("{}\n")
-        before = self.snapshot(vibe_home)
+        before = self.snapshot()
         self.run_script("install.sh")
-        self.run_vibe_once(vibe_home)
         self.run_script("uninstall.sh", "--purge")
         self.assertFalse(os.path.exists(self.bridge_home))
-        self.assert_same(before, vibe_home)
+        self.assert_same(before, backup_left=False)
 
-    def test_windows_path_in_the_shim_stays_literal(self):
-        spec = importlib.util.spec_from_file_location("vibe_install_under_test",
-                                                      os.path.join(ROOT, "install", "vibe_install.py"))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        vibe_home = os.path.join(self.tmp, "v")
-        os.makedirs(vibe_home)
-        # A folder name with backslashes, \U and \n in it, as in C:\Users\<account>\.agent-bridge
-        bridge = os.path.join(self.tmp, r"C:\Users\name\.agent-bridge")
+    def test_paths_with_quotes_and_spaces_in_the_launcher_and_hooks(self):
+        module = load_installer()
+        bridge = os.path.join(self.tmp, "it's a bridge")
+        target = os.path.join(self.tmp, "plugin")
+        python = os.path.join(self.tmp, "py thon", "python3")
         with contextlib.redirect_stdout(io.StringIO()):
-            module.install(ROOT, bridge, vibe_home, False)
-        line = [ln for ln in self.shim_text(vibe_home).splitlines() if ln.startswith("BRIDGE_DIR = ")][0]
-        value = ast.literal_eval(line.split(" = ", 1)[1].split("  #")[0])
-        self.assertEqual(value, os.path.abspath(bridge))
-        self.assertIn("\\Users\\name\\", value)
+            module.write_plugin(ROOT, target, python, bridge)
+        launcher = os.path.join(target, "vibe-mcp")
+        proc = subprocess.run(["/bin/sh", "-n", launcher], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The hook line, run by a shell, gives the paths back unchanged.
+        text = self.read(target, "ai.mistral.vibe", "hooks.toml")
+        line = [l for l in text.splitlines() if l.startswith("command") and "session_start" in l][0]
+        command = json.loads(line.split("=", 1)[1].strip())
+        echo = command.replace(module.hook_command(python, bridge), "printf '%s\\n' " + module.hook_command(python, bridge))
+        out = subprocess.run(["/bin/sh", "-c", echo], capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(out[0], "AGENT_BRIDGE_HOME=" + bridge)
+        self.assertEqual(out[1:], [python, os.path.join(bridge, "vibe_hook.py"), "session_start"])
+
+    def test_the_shell_function_reaches_vibe_diaulos(self):
+        folder = os.path.join(self.tmp, "a dir \"quoted\"")
+        os.makedirs(folder)
+        shutil.copy(os.path.join(ROOT, "install", "claude-channel.sh"), folder)
+        with open(os.path.join(folder, "vibe_diaulos.py"), "w") as f:
+            f.write("import sys; print('diaulos', sys.argv[1:])\n")
+        script = '. "$1"; vibe --resume "a b"; AGENT_BRIDGE_VIBE_RELAY=0 vibe -v'
+        with open(os.path.join(self.bin, "vibe"), "w") as f:
+            f.write("#!/bin/sh\necho real \"$@\"\n")
+        os.chmod(os.path.join(self.bin, "vibe"), 0o755)
+        proc = subprocess.run(["/bin/bash", "-c", script, "x", os.path.join(folder, "claude-channel.sh")],
+                              capture_output=True, text=True, env=dict(self.env, PATH=self.bin + ":/usr/bin:/bin"))
+        self.assertEqual(proc.stdout.splitlines(), ["diaulos ['--resume', 'a b']", "real -v"], proc.stderr)
 
 
 if __name__ == "__main__":

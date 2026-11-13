@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Proofs of the Mistral Vibe kind (docs/VIBE-DESIGN.md §6, task T5b). Linux and macOS.
+# Proofs of the Mistral Vibe kind (docs/VIBE-DESIGN.md §8, task T14). Linux and macOS.
 #
 #   tests/run-proofs.sh                         every unit test, no model call
-#   DIAULOS_REAL_VIBE=1 tests/run-proofs.sh     the same, then the real checks (paid calls)
+#   DIAULOS_REAL_VIBE=1 tests/run-proofs.sh     the same, then the real gates (paid calls)
 #
-# The real checks use a throwaway bridge home and VIBE_HOME, devstral-small, and the shim
-# installed by install/vibe_install.py; the real HOME is only read, for vibe's API key:
-#   tests/real_proofs.py    vibe-acp: tools listed, vibe-new, 3 passes of vibe-run with
-#                           their delays, session/load, max_turns 1, price cap $0.001
-#   tests/real_vibe_tui.py  vibe TUI in a pseudo-terminal: 3 idle deliveries, 3 during a
-#                           turn, kill and --resume, bridge_send, keys typed
-# DIAULOS_PROOF_BUDGET is the budget of all real checks together, in $ (default 0.10,
-# at most 0.50). Each script stops above what it is given; the second one gets what the
-# first one left. Rerun after every vibe upgrade: delivery and the price cap rest on
-# vibe's private names.
+# The real gates run in a throwaway folder made by tests/vibe3/t14_env.py: its own VIBE_HOME
+# (config.toml copied from ~/.vibe/config.toml, read only, with devstral-small), its own bridge
+# home and HOME. Nothing outside that folder is written: not ~/.vibe, not ~/.agent-bridge.
+#   tests/vibe3/gate_g7.py      the plugin's MCP launcher and hooks, no model call
+#   tests/vibe3/gates_relay.py  R1 to R9 of §8.9.9, 3 passes each; one model call per delivered
+#                               turn (about 50 turns, a few cents); vibe -p runs with --max-price 0.50,
+#                               TUI turns have no price cap
+# R9 greps the relay log for the person's account values when GATE_TERMS_FILE names a mode-600
+# file of them (one per line); without it R9 fails. Rerun after every vibe upgrade: the relay
+# rests on vibe's private protocol.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,7 +24,7 @@ trap 'rm -f "$LOG"' EXIT
 status=0
 
 echo "== unit tests ($("$PY" --version 2>&1))"
-# DIAULOS_REAL_VIBE is left out here: its RealVibeAcpTest uses the config's own model.
+# DIAULOS_REAL_VIBE is left out here: no unit test makes a model call.
 env -u DIAULOS_REAL_VIBE "$PY" -m unittest discover -s tests -p "test_*.py" >"$LOG" 2>&1
 unit=$?
 if [ $unit -eq 0 ]; then
@@ -35,37 +35,34 @@ else
 fi
 
 if [ "${DIAULOS_REAL_VIBE:-}" != "1" ]; then
-  echo "== real checks skipped (set DIAULOS_REAL_VIBE=1; paid model calls)"
+  echo "== real gates skipped (set DIAULOS_REAL_VIBE=1; paid model calls)"
   exit $status
 fi
-if ! command -v vibe >/dev/null || ! command -v vibe-acp >/dev/null; then
-  echo "== real checks: vibe and vibe-acp must be on PATH"
+if ! command -v vibe >/dev/null; then
+  echo "== real gates: vibe must be on PATH"
   exit 1
 fi
 
-BUDGET="${DIAULOS_PROOF_BUDGET:-0.10}"
-if ! "$PY" -c "import sys; b = float(sys.argv[1]); sys.exit(not 0 < b <= 0.5)" "$BUDGET" 2>/dev/null; then
-  echo "DIAULOS_PROOF_BUDGET=$BUDGET: give a budget above 0 and at most 0.50"
-  exit 1
-fi
-
-echo "== real vibe-acp checks (budget \$$BUDGET)"
-"$PY" tests/real_proofs.py --budget "$BUDGET" | tee "$LOG"
-[ "${PIPESTATUS[0]}" -eq 0 ] || status=1
-spent="$(sed -n 's/^total \([0-9.]*\)$/\1/p' "$LOG" | tail -n 1)"
-left="$("$PY" -c "import sys; print(f'{float(sys.argv[1]) - float(sys.argv[2] or 0):.4f}')" "$BUDGET" "${spent:-}")"
-
-echo "== real vibe TUI checks (budget left \$$left)"
-if "$PY" -c "import sys; sys.exit(not float(sys.argv[1]) >= 0.02)" "$left"; then
-  "$PY" tests/real_vibe_tui.py --price "$left" | tee "$LOG"
-  [ "${PIPESTATUS[0]}" -eq 0 ] || status=1
-  tui="$(sed -n 's/.*run total \$\([0-9.]*\).*/\1/p' "$LOG" | tail -n 1)"
-else
-  echo "skipped: less than \$0.02 left"
-  tui=0
-  status=1
-fi
-
-"$PY" -c "import sys; a, b = (float(x or 0) for x in sys.argv[1:]); print(f'== cost of the real checks: \${a:.4f} + \${b:.4f} = \${a + b:.4f} (budget \$$BUDGET)')" "${spent:-0}" "${tui:-0}"
+OUT="$(mktemp -d -t diaulos-gates.XXXXXX)"
+echo "== real gates in $OUT (kept for reading)"
+"$PY" tests/vibe3/t14_env.py "$OUT" >/dev/null || { echo "t14_env.py failed"; exit 1; }
+for gate in g7 r1 r2 r3 r4 r7 r8 r9; do
+  if [ "$gate" = g7 ]; then
+    "$PY" tests/vibe3/gate_g7.py "$OUT" --home >"$OUT/gate-g7.json"
+  else
+    "$PY" tests/vibe3/gates_relay.py "$OUT" "$gate" --passes 3 >/dev/null
+  fi
+  if [ $? -eq 0 ]; then echo "$gate PASS"; else echo "$gate FAIL (see $OUT/gate-$gate.json)"; status=1; fi
+done
+"$PY" - "$OUT" <<'PY'
+import glob, json, sys
+turns = tokens_in = tokens_out = 0
+for path in glob.glob(sys.argv[1] + "/gate-r*.json"):
+    report = json.load(open(path, encoding="utf-8"))
+    turns += report.get("TUI model turns", 0)
+    tokens_in += report.get("tokens (input, output)", [0, 0])[0]
+    tokens_out += report.get("tokens (input, output)", [0, 0])[1]
+print("== TUI model turns %d, tokens in %d, out %d" % (turns, tokens_in, tokens_out))
+PY
 [ $status -eq 0 ] && echo "== PASS" || echo "== FAIL"
 exit $status

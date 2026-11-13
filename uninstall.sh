@@ -64,7 +64,7 @@ if os.path.exists(settings_path):
                 print("removed claude allow rules")
 EOF
 
-# Mistral Vibe tools (vibe sessions are never touched, even with --purge).
+# Mistral Vibe plugin, config.toml block and vibe-diaulos (vibe sessions are never touched, even with --purge).
 python3 "$REPO/install/vibe_install.py" uninstall "$BRIDGE_HOME" "${VIBE_HOME:-$HOME/.vibe}"
 
 if command -v claude >/dev/null; then
@@ -93,7 +93,8 @@ rm -f "$BRIDGE_HOME/claude-channel.sh"
 [ -f "$BRIDGE_HOME/bridge.py" ] && python3 "$BRIDGE_HOME/bridge.py" remote stop >/dev/null 2>&1 || true
 rm -rf "$HOME/.claude/skills/agy-bridge" "$HOME/.claude/skills/diaulos-remote" && echo "removed claude skills"
 rm -f "$BRIDGE_HOME/bridge.py" "$BRIDGE_HOME/mcp_channel.py" "$BRIDGE_HOME/remote.py" "$BRIDGE_HOME/state/agy.auto-relay"
-rm -f "$BRIDGE_HOME/vibe_sessions.py" "$BRIDGE_HOME/vibe_runner.py" "$BRIDGE_HOME/vibe_plugin.py"
+rm -f "$BRIDGE_HOME/vibe_sessions.py" "$BRIDGE_HOME/vibe_runner.py" "$BRIDGE_HOME/vibe_plugin.py" \
+      "$BRIDGE_HOME/vibe_mcp.py" "$BRIDGE_HOME/vibe_hook.py" "$BRIDGE_HOME/vibe_relay.py" "$BRIDGE_HOME/vibe_diaulos.py"
 rm -rf "$BRIDGE_HOME/__pycache__"
 if [ "${1:-}" = "--purge" ]; then
   rm -rf "$BRIDGE_HOME" && echo "purged $BRIDGE_HOME"
