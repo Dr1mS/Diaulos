@@ -54,7 +54,7 @@ A session is woken **only when a message is waiting for it**, and messages that 
 
 - **Cross-vendor messaging** — Claude Code ⇄ Claude Code, agy ⇄ agy, Claude ⇄ agy, any number of sessions, in any directory.
 - **Wake-on-message** — idle Claude Code and agy sessions take their turn by themselves when a message arrives.
-- **Closed terminals still answer** — a message to an agy CLI conversation whose terminal is closed runs one turn with `agy -p`; a closed Mistral Vibe conversation runs one turn with `vibe -p --resume`, in the same session.
+- **Closed terminals still answer** — a message to an agy CLI conversation whose terminal is closed runs one turn with `agy -p`; a closed Mistral Vibe conversation runs one turn in print mode (`vibe --prompt-file … --resume`), in the same session.
 - **Mistral Vibe** — a vibe conversation sends and lists with two native tools, and a vibe TUI started with `vibe-diaulos` (or a plain `vibe` after `--shell`) takes a message by itself when it is idle, without anyone typing. See [Mistral Vibe](#mistral-vibe).
 - **Spawn new sessions** — `agy:new-cli` / `agy:new` start a new agy session with the message as its first prompt.
 - **Other machines** — pair two computers once, then `send remote:laptop/claude:review "…"`. Outgoing connections only (HTTPS to ntfy.sh by default), ChaCha20-Poly1305 end to end, through ntfy.sh or your own relay.
@@ -214,11 +214,11 @@ The installer copies a vibe plugin to `~/.vibe/plugins/diaulos/` (`$VIBE_HOME/pl
 
 | | What happens to a message |
 |---|---|
-| TUI started with `vibe-diaulos`, idle | It starts a turn by itself. The relay checks the mailbox every 0.5 s, and the turn starts about 0.5 s after it sends the message (measured on Linux, vibe 3.1.2). The TUI shows the sender and the text above the answer (`list`: `TUI: wakes on message`). This holds before your first prompt too |
+| TUI started with `vibe-diaulos`, idle | It starts a turn by itself. The relay checks the mailbox every 0.5 s and sends the message as soon as it finds it. The TUI shows the sender and the text above the answer (`list`: `TUI: wakes on message`). This holds before your first prompt too |
 | TUI started with `vibe-diaulos`, working | It joins the turn that is running: vibe adds it to that turn and the model answers it there, without waiting for the turn to end and without starting a new one |
 | TUI started with the real `vibe` (no relay) | It waits for your next prompt, which carries it (`TUI: no relay, delivers at next message`) |
 | Relay stopped waking after 3 failures in a row | It waits for your next prompt (`TUI: relay stopped waking (3 failures), delivers at next message`) |
-| Closed | Diaulos reopens the same session in the background with `vibe -p --resume` (process `vibe-run`), runs one turn per batch, and exits (`closed: wakes with vibe -p`). `vibe --resume <session id>` then shows the turn |
+| Closed | Diaulos reopens the same session in the background in print mode, `vibe --prompt-file … --resume` (process `vibe-run`), runs one turn per batch, and exits (`closed: wakes with vibe -p`). `vibe --resume <session id>` then shows the turn |
 | Closed, `vibe` not found | It waits until you open the conversation in a TUI (`closed: waits until reopened (no vibe command)`) |
 | TUI or relay killed in the middle of a delivery | The message goes back to the mailbox, unless the session already holds it, so it is not delivered twice |
 
@@ -361,7 +361,7 @@ Claude Code and agy share no protocol, so Diaulos uses a file mailbox in `~/.age
 
 <p align="center"><img src="docs/images/architecture.svg" alt="Senders write to the ~/.agent-bridge mailbox; Claude is woken by its MCP channel, agy by its language server or agy -p, and remote messages go through the gateway" width="900"></p>
 
-A reader claims a message atomically by moving it to `archive/`, so two readers never get the same one. If the delivery fails, the message goes back to the inbox and is retried; a reader killed in mid-delivery can lose it. An open vibe TUI gets the message from the Diaulos relay between the TUI and vibe's app server, as vibe's own "message from another session"; a closed one through `vibe -p --resume`. Every detail, including the full list of what the installer changes, is in [docs/INTERNALS.md](docs/INTERNALS.md).
+A reader claims a message atomically by moving it to `archive/`, so two readers never get the same one. If the delivery fails, the message goes back to the inbox and is retried; a reader killed in mid-delivery can lose it. An open vibe TUI gets the message from the Diaulos relay between the TUI and vibe's app server, as vibe's own "message from another session"; a closed one through print mode, `vibe --prompt-file … --resume`. Every detail, including the full list of what the installer changes, is in [docs/INTERNALS.md](docs/INTERNALS.md).
 
 **What gets installed:** `~/.agent-bridge/` (the bridge and its data), the `diaulos` plugin in `~/.vibe/plugins/`, one marked block in `~/.vibe/config.toml` and `~/.agent-bridge/vibe-diaulos` when vibe 3 is installed, global agy hooks in `~/.gemini/config/hooks.json`, the `agent-bridge` MCP server for Claude Code (user scope), the `agy-bridge` and `diaulos-remote` skills in `~/.claude/skills/`, allow rules in `~/.claude/settings.json`, and with `--shell` / `-Shell` the `claude` wrapper (`~/.bashrc`, PowerShell profile, cmd `AutoRun`) and the `vibe` function (`~/.bashrc`, PowerShell profile). Each config file is backed up first as `<file>.bak-agent-bridge`, and the uninstaller reverts these changes (mailboxes and keys stay unless `--purge`).
 

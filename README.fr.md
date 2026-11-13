@@ -54,7 +54,7 @@ Une session n'est réveillée **que lorsqu'un message l'attend**, et les message
 
 - **D'un outil à l'autre** — Claude Code ⇄ Claude Code, agy ⇄ agy, Claude ⇄ agy, autant de sessions que vous voulez, dans n'importe quel dossier.
 - **Réveil à l'arrivée d'un message** — les sessions Claude Code et agy inactives reprennent la main d'elles-mêmes dès qu'un message arrive.
-- **Même terminal fermé, on vous répond** — un message à une conversation agy CLI dont le terminal est fermé lance un tour avec `agy -p` ; une conversation Mistral Vibe fermée lance un tour avec `vibe -p --resume`, dans la même session.
+- **Même terminal fermé, on vous répond** — un message à une conversation agy CLI dont le terminal est fermé lance un tour avec `agy -p` ; une conversation Mistral Vibe fermée lance un tour en mode print (`vibe --prompt-file … --resume`), dans la même session.
 - **Mistral Vibe** — une conversation vibe écrit et liste les sessions avec deux outils natifs, et une TUI vibe lancée par `vibe-diaulos` (ou par un simple `vibe` après `--shell`) prend un message d'elle-même quand elle est inactive, sans que personne tape. Voir [Mistral Vibe](#mistral-vibe).
 - **Nouvelles sessions à la demande** — `agy:new-cli` / `agy:new` démarrent une nouvelle session agy, avec le message comme premier prompt.
 - **Autres machines** — appairez deux ordinateurs une fois, puis `send remote:laptop/claude:review "…"`. Uniquement des connexions sortantes (HTTPS vers ntfy.sh par défaut), ChaCha20-Poly1305 de bout en bout, via ntfy.sh ou votre propre relais.
@@ -214,11 +214,11 @@ L'installeur copie un plugin vibe dans `~/.vibe/plugins/diaulos/` (`$VIBE_HOME/p
 
 | | Ce que devient un message |
 |---|---|
-| TUI lancée par `vibe-diaulos`, inactive | Il lance un tour de lui-même. Le relais regarde la boîte toutes les 0,5 s, et le tour démarre environ 0,5 s après l'envoi du message par le relais (mesuré sous Linux, vibe 3.1.2). La TUI affiche l'expéditeur et le texte au-dessus de la réponse (`list` : `TUI: wakes on message`). C'est vrai aussi avant votre première demande |
+| TUI lancée par `vibe-diaulos`, inactive | Il lance un tour de lui-même. Le relais regarde la boîte toutes les 0,5 s et envoie le message dès qu'il le trouve. La TUI affiche l'expéditeur et le texte au-dessus de la réponse (`list` : `TUI: wakes on message`). C'est vrai aussi avant votre première demande |
 | TUI lancée par `vibe-diaulos`, au travail | Il rejoint le tour en cours : vibe l'ajoute à ce tour et le modèle y répond, sans attendre la fin du tour et sans en lancer un nouveau |
 | TUI lancée par le vrai `vibe` (sans relais) | Il attend votre prochaine demande, qui l'emporte (`TUI: no relay, delivers at next message`) |
 | Relais qui a cessé de réveiller après 3 échecs de suite | Il attend votre prochaine demande (`TUI: relay stopped waking (3 failures), delivers at next message`) |
-| Fermée | Diaulos rouvre la même session en arrière-plan avec `vibe -p --resume` (processus `vibe-run`), fait un tour par lot de messages, puis s'arrête (`closed: wakes with vibe -p`). `vibe --resume <identifiant de session>` montre ensuite ce tour |
+| Fermée | Diaulos rouvre la même session en arrière-plan en mode print, `vibe --prompt-file … --resume` (processus `vibe-run`), fait un tour par lot de messages, puis s'arrête (`closed: wakes with vibe -p`). `vibe --resume <identifiant de session>` montre ensuite ce tour |
 | Fermée, `vibe` introuvable | Il attend que vous ouvriez la conversation dans une TUI (`closed: waits until reopened (no vibe command)`) |
 | TUI ou relais tué au milieu d'une livraison | Le message retourne dans la boîte, sauf si la session le contient déjà : il n'est pas livré deux fois |
 
@@ -361,7 +361,7 @@ Claude Code et agy ne partagent aucun protocole : Diaulos s'appuie donc sur une 
 
 <p align="center"><img src="docs/images/architecture.svg" alt="Les expéditeurs écrivent dans la boîte aux lettres ~/.agent-bridge ; Claude est réveillé par son canal MCP, agy par son language server ou par agy -p, et les messages distants passent par la passerelle" width="900"></p>
 
-Un lecteur réserve un message de manière atomique en le déplaçant dans `archive/` : deux lecteurs n'obtiennent donc jamais le même. Si la livraison échoue, le message retourne dans la boîte et sera retenté ; un lecteur tué en pleine livraison peut le perdre. Une TUI vibe ouverte reçoit le message par le relais de Diaulos placé entre la TUI et le serveur d'application de vibe, comme le « message d'une autre session » propre à vibe ; une vibe fermée par `vibe -p --resume`. Tous les détails, y compris la liste complète de ce que l'installeur modifie, sont dans les [coulisses](docs/INTERNALS.md) (en anglais).
+Un lecteur réserve un message de manière atomique en le déplaçant dans `archive/` : deux lecteurs n'obtiennent donc jamais le même. Si la livraison échoue, le message retourne dans la boîte et sera retenté ; un lecteur tué en pleine livraison peut le perdre. Une TUI vibe ouverte reçoit le message par le relais de Diaulos placé entre la TUI et le serveur d'application de vibe, comme le « message d'une autre session » propre à vibe ; une vibe fermée par le mode print, `vibe --prompt-file … --resume`. Tous les détails, y compris la liste complète de ce que l'installeur modifie, sont dans les [coulisses](docs/INTERNALS.md) (en anglais).
 
 **Ce qui est installé :** `~/.agent-bridge/` (le pont et ses données), le plugin `diaulos` dans `~/.vibe/plugins/`, un bloc balisé dans `~/.vibe/config.toml` et `~/.agent-bridge/vibe-diaulos` quand vibe 3 est installée, des hooks agy globaux dans `~/.gemini/config/hooks.json`, le serveur MCP `agent-bridge` pour Claude Code (portée utilisateur), les skills `agy-bridge` et `diaulos-remote` dans `~/.claude/skills/`, des règles d'autorisation dans `~/.claude/settings.json` et, avec `--shell` / `-Shell`, le wrapper `claude` (`~/.bashrc`, profil PowerShell, `AutoRun` de cmd) et la fonction `vibe` (`~/.bashrc`, profil PowerShell). Chaque fichier de configuration est d'abord sauvegardé en `<fichier>.bak-agent-bridge`, et le désinstalleur annule ces changements (les boîtes aux lettres et les clés restent, sauf avec `--purge`).
 
