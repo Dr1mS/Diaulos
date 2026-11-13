@@ -12,7 +12,9 @@ real vibe-acp (prototypes/vibe-acp/out/run/*.jsonl):
 
 Sessions are written like vibe writes them, under the save_dir of
 $VIBE_HOME/config.toml ([session_logging] save_dir) or $VIBE_HOME/logs/session:
-session_<YYYYMMDD_HHMMSS>_<first 8 hex>/{meta.json,messages.jsonl}.
+unified/<session id>/{meta.json,messages.jsonl} (the folder of vibe 3, so that
+bridge/vibe_sessions.py reads it; the messages.jsonl and the ACP protocol stay
+those of vibe 2.20, until the vibe-acp runner is removed).
 session/load keeps the session id and the folder, and counts the stats of
 this process only, as the real one does (probe vibe-acp A1, A4).
 
@@ -103,19 +105,8 @@ def new_session_id():
 
 
 def find_session(session_id):
-    root = save_dir()
-    if not os.path.isdir(root):
-        return None
-    for name in sorted(os.listdir(root)):
-        meta = os.path.join(root, name, "meta.json")
-        if name.startswith("session_") and os.path.exists(meta):
-            try:
-                with open(meta, encoding="utf-8") as f:
-                    if json.load(f).get("session_id") == session_id:
-                        return os.path.join(root, name)
-            except (OSError, ValueError):
-                continue
-    return None
+    folder = os.path.join(save_dir(), "unified", session_id)
+    return folder if os.path.exists(os.path.join(folder, "meta.json")) else None
 
 
 class Session:
@@ -129,8 +120,7 @@ class Session:
     @classmethod
     def create(cls, cwd):
         sid = new_session_id()
-        folder = os.path.join(save_dir(), "session_%s_%s" % (
-            datetime.now().strftime("%Y%m%d_%H%M%S"), sid[:8]))
+        folder = os.path.join(save_dir(), "unified", sid)
         os.makedirs(folder)
         meta = {"session_id": sid, "parent_session_id": None, "start_time": now_iso(),
                 "end_time": None, "environment": {"working_directory": cwd},

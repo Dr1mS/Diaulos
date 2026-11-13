@@ -97,7 +97,7 @@ class FakeVibeAcpTest(unittest.TestCase):
         return [r for r in rows if event is None or r["event"] == event]
 
     def sessions(self):
-        return sorted(glob.glob(os.path.join(self.vibe_home, "logs", "session", "session_*")))
+        return sorted(glob.glob(os.path.join(self.vibe_home, "logs", "session", "unified", "*")))
 
     def meta(self, folder):
         with open(os.path.join(folder, "meta.json"), encoding="utf-8") as f:
@@ -126,7 +126,7 @@ class FakeVibeAcpTest(unittest.TestCase):
         self.assertEqual(kinds, ["user_message_chunk", "agent_message_chunk", "usage_update"])
         self.assertEqual(c.close(), 0)
         [folder] = self.sessions()
-        self.assertTrue(os.path.basename(folder).endswith("_" + sid[:8]))
+        self.assertEqual(os.path.basename(folder), sid)
         self.assertEqual(self.lines(folder), 2)
         self.assertEqual(self.meta(folder)["title"], "first")
 
@@ -154,7 +154,7 @@ class FakeVibeAcpTest(unittest.TestCase):
                     % other.replace("\\", "\\\\"))
         c = self.client()
         sid = self.new_session(c)
-        self.assertEqual(len(glob.glob(os.path.join(other, "session_*_" + sid[:8]))), 1)
+        self.assertTrue(os.path.exists(os.path.join(other, "unified", sid, "meta.json")))
 
     def test_permission_request_and_reject_once(self):
         c = self.client("permission")
@@ -397,12 +397,14 @@ class SessionFixturesTest(unittest.TestCase):
         for case, sids in ids.items():
             for sid, folder in zip(sids, folders[case]):
                 self.assertTrue(sid.endswith("-" + SUFFIX[case]))
-                self.assertTrue(os.path.basename(folder).endswith("_" + sid[:8]))
+                self.assertEqual(folder, os.path.join(save_dir, "unified", sid))
                 with open(os.path.join(folder, "meta.json"), encoding="utf-8") as f:
                     self.assertEqual(json.load(f)["session_id"], sid)
-        top = [d for d in os.listdir(save_dir) if d.startswith("session_")]
-        self.assertEqual(len(top), 10)  # the subagent under agents/ is not at the top
-        self.assertTrue(glob.glob(os.path.join(save_dir, "*", "agents", "session_*_ddddddd2", "meta.json")))
+                self.assertTrue(os.path.exists(os.path.join(folder, "CURRENT")))
+        self.assertEqual(sorted(os.listdir(save_dir)), ["active", "unified"])
+        self.assertFalse(glob.glob(os.path.join(save_dir, "session_*")), "no vibe 2.20 folder")
+        # 9 sessions, 2 broken folders and the session index of vibe.
+        self.assertEqual(len(os.listdir(os.path.join(save_dir, "unified"))), 12)
         # The current session of each listed conversation has the latest end_time.
         for case, want in EXPECTED.items():
             if "current" not in want:

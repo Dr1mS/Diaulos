@@ -117,7 +117,7 @@ class VibeRunTest(RunnerSetup):
         self.assertEqual(load[0]["params"]["cwd"], self.workspace)
         self.assertEqual(self.meta(folder)["session_id"], self.ids["renamed"][0], "the id changed")
         self.assertEqual(self.lines(folder), before + 2, "user and reply not in the same folder")
-        self.assertEqual(len(os.listdir(self.save_dir)), 10, "a new session folder was made")
+        self.assertEqual(len(os.listdir(os.path.join(self.save_dir, "unified"))), 12, "a new session folder was made")
         pong = self.wait_inbox("claude")
         self.assertEqual(pong[0]["from"], ADDRESS)
         self.assertIn("delivered", self.log_of())
@@ -313,7 +313,9 @@ class VibeRunTest(RunnerSetup):
 class VibeNewTest(RunnerSetup):
 
     def new_conversations(self):
-        return [m for m in (self.meta(os.path.join(self.save_dir, d)) for d in os.listdir(self.save_dir))
+        unified = os.path.join(self.save_dir, "unified")
+        return [m for m in (self.meta(os.path.join(unified, d)) for d in os.listdir(unified)
+                            if os.path.exists(os.path.join(unified, d, "meta.json")))
                 if not any(m["session_id"] in ids for ids in self.ids.values())]
 
     def test_vibe_new_with_a_name(self):

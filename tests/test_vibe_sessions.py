@@ -85,13 +85,31 @@ class SessionsModuleTest(VibeSetup):
             self.assertEqual(c["title"], expected["auto_title"], case)
             self.assertEqual(c["workspace"], self.workspace, case)
             self.assertEqual(c["address"], "vibe:" + SUFFIX[case], case)
-        self.assertEqual(found[SUFFIX["compacted"]]["sessions"], 3)
-        self.assertEqual(found[SUFFIX["cleared"]]["sessions"], 2)
+        self.assertEqual(found[SUFFIX["compacted"]]["sessions"], 1, "/compact keeps the id")
+        self.assertEqual(found[SUFFIX["twice"]]["sessions"], 2)
+
+    def test_clear_starts_another_conversation(self):
+        found = self.vs.conversations(7, self.save_dir)
+        before, after = found[SUFFIX["before_clear"]], found[SUFFIX["after_clear"]]
+        self.assertNotEqual(before["address"], after["address"])
+        self.assertEqual((before["sessions"], after["sessions"]), (1, 1))
 
     def test_subagents_are_left_out(self):
         everything = self.vs.conversations(None, self.save_dir)
         self.assertNotIn(SUFFIX["subagent"], everything)
-        self.assertEqual(everything[SUFFIX["compacted"]]["sessions"], 3, "a subagent counted in its parent")
+        self.assertEqual(everything[SUFFIX["compacted"]]["sessions"], 1, "a subagent counted in its parent")
+
+    def test_only_unified_folders_with_their_own_meta(self):
+        found = self.vs.sessions(self.save_dir)
+        self.assertEqual(sorted(s["session"] for s in found), sorted(i for v in self.ids.values() for i in v))
+        self.assertTrue(all(os.path.dirname(s["folder"]) == os.path.join(self.save_dir, "unified") for s in found))
+        # A vibe 2.20 folder is not read any more.
+        legacy = os.path.join(self.save_dir, "session_20261101_120000_12345678")
+        os.makedirs(legacy)
+        with open(os.path.join(legacy, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"session_id": "12345678-0000-0000-0000-0123456789ab", "title": "legacy"}, f)
+        self.assertNotIn("0123456789ab", self.vs.conversations(None, self.save_dir))
+        self.assertEqual(self.vs.sessions(os.path.join(self.tmp, "nowhere")), [])
 
     def test_old_conversation_listed_only_with_all(self):
         self.assertNotIn(SUFFIX["old"], self.vs.conversations(7, self.save_dir))
@@ -197,9 +215,9 @@ class BridgeVibeTest(VibeSetup):
         with self.assertRaises(SystemExit) as nobody:
             bridge.resolve("vibe")
         self.assertIn("matches 0", str(nobody.exception), "`vibe` alone picks a live TUI only")
-        self.write_peer(SUFFIX["cleared"], tui_pid=os.getpid(), tui_seen=time.time())
-        self.assertEqual(bridge.resolve("vibe"), "vibe:" + SUFFIX["cleared"])
-        self.assertEqual(bridge.resolve("vibe@work"), "vibe:" + SUFFIX["cleared"])
+        self.write_peer(SUFFIX["after_clear"], tui_pid=os.getpid(), tui_seen=time.time())
+        self.assertEqual(bridge.resolve("vibe"), "vibe:" + SUFFIX["after_clear"])
+        self.assertEqual(bridge.resolve("vibe@work"), "vibe:" + SUFFIX["after_clear"])
 
     def test_unknown_vibe_address_is_refused_with_the_list(self):
         proc = self.send("vibe:x", "hello", check=False)
