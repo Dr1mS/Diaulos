@@ -242,7 +242,7 @@ def handle(msg):
         result(req_id, {
             "protocolVersion": min(requested, MAX_PROTOCOL),  # ISO dates sort as strings
             "capabilities": {"experimental": {"claude/channel": {}}, "tools": {}},
-            "serverInfo": {"name": SERVER_NAME, "version": "0.1.0"},
+            "serverInfo": {"name": SERVER_NAME, "version": "0.4.0"},
             "instructions": INSTRUCTIONS,
         })
     elif method == "notifications/initialized":
