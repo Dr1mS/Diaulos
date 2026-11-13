@@ -20,8 +20,9 @@ The Diaulos thread:
   - every 0.5 s, claims the inbox of vibe:<suffix> and sends one request per batch:
     session/turn/enqueue with id "diaulos-relay-<n>", a new entryId and idempotency key, the
     bridge text, sender {"sessionId": "diaulos:<from>", "title": "<from>"} and delivery
-    "start_turn". vibe starts a turn on an idle session, or queues the message behind the
-    running one. The answer to that id is kept here, never passed to the TUI: a result closes
+    "start_turn". vibe starts a turn on an idle session. During a running turn, the message
+    joins that turn: no second turn, no queue; the model answers both entries in the same turn
+    and nothing is discarded (gate R4, §8.9.11). The answer to that id is kept here, never passed to the TUI: a result closes
     the claim; an error or no answer in 10 s puts the messages back in the inbox;
   - before sending, writes state/vibe-inflight/<suffix>.json (pid, paths, entry_id): if the relay
     dies before the answer, whoever reads vibe peers next puts the messages back, unless the

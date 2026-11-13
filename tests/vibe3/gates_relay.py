@@ -197,8 +197,8 @@ def r1(run, passes):
         f.write("#!%s\nimport json, sys\nwith open(%r, 'a') as f:\n    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
                 % (sys.executable, stub_log))
     os.chmod(stub, 0o755)
-    uses = [["-p", "hi"], ["--prompt-file", "x.txt"], ["mcp", "list"], ["config"], ["help"], ["update"],
-            ["-v"], ["--version"], ["-h"], ["--help"], ["--setup"], ["--check-upgrade"]]
+    uses = [["-p", "hi"], ["--prompt", "hi"], ["--prompt-file", "x.txt"], ["mcp", "list"], ["config"], ["help"],
+            ["update"], ["-v"], ["--version"], ["-h"], ["--help"], ["--setup"], ["--check-upgrade"]]
     relays_before = len(run.relay_rows())
     routed = []
     for use in uses:
@@ -463,7 +463,7 @@ def verdict(gate, r):
     """Each "fails if" of §8.9.9 for this gate, as {criterion: passed}."""
     if gate == "r1":
         delays = r["added delay per line, ms (median of 100 lines, 3 runs)"]
-        return {"10 non-TUI uses reach the stub unchanged": all(u["stub got the same arguments"]
+        return {"13 non-TUI uses reach the stub unchanged": all(u["stub got the same arguments"]
                                                                 for u in r["non-TUI uses routed to the stub"]),
                 "no relay starts for them": r["relay starts during routing"] == 0
                 and r["relay starts during real --version and -p"] == 0,
