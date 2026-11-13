@@ -4,6 +4,8 @@ All notable changes to Diaulos. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
 ### Added
 
 - **Mistral Vibe 3.** vibe 3 conversations join as a third kind of agent, `vibe:<id>` (the last 12 hex digits of the session id, kept across `/compact` and `--resume`; `/clear` gives a new one) or `vibe:<name>` after `/rename`. The installer copies a native vibe plugin to `~/.vibe/plugins/diaulos/` (an MCP server `diaulos` with the tools `send` and `list_agents`, the hooks `session_start` and `pre_agent`, a skill) and writes one marked block, after a backup, in `~/.vibe/config.toml` so that both tools run without approval; it stops without writing anything if that file already has an MCP server named `diaulos`. `vibe-diaulos` (and, with `--shell`, a `vibe` function) opens the TUI with a small Diaulos relay between vibe's TUI and its app server: a message wakes an idle TUI, and one sent during a turn joins that turn; vibe shows the sender and the text. The uses that never open the TUI (`-p`, `mcp`, `config`, `update`, `--version` and the others) go to the real `vibe` unchanged. A TUI opened with the real `vibe` gets its messages with the person's next prompt. A closed conversation runs one turn in the same session with `vibe --prompt-file … --resume <session>` (`vibe-run`), capped by vibe's own `--max-turns` and `--max-price` per run (`state/vibe-limits.json`: 20 turns, 0.50). `vibe:new` and `vibe:new@<name>` start a new conversation in print mode (`vibe --prompt-file … --workdir`). Limits: the relay relies on vibe's app-server protocol and launcher, which vibe does not document, so a vibe update can break it; `vibe-diaulos` then opens vibe without the relay and says so, and messages arrive with the person's next prompt. `/branch` makes a copy with its own address, a closed conversation, while the TUI keeps its own. `vibe:new` opens no TUI window: the new conversation runs in the background and can be opened with `vibe --resume`. The relay keeps a guard: if it finds vibe's `vibe-rs` stopped (state `T`) with a parent outside its session, it sends it SIGHUP then SIGCONT, never after a Ctrl+Z. The stopped `vibe-rs` seen in our tests came from a terminal driven by a script; with real GNOME Terminal windows, 0 of 140 ends (window closed, or SIGHUP to the shell) left it stopped, with or without Diaulos. The cause is not explained. A conversation that ends before its first saved message is not listed. For 0.5 to 1.3 s while `--resume` opens a conversation, `list` shows an extra empty session and the resumed conversation as closed; a message sent then is delivered once to the resumed conversation. A `vibe-run` that finds the session open in a TUI (`Session is already open`) leaves the message waiting for that TUI. Tested for real on Linux with vibe 3.1.2 (gates R1 to R9, `docs/VIBE-DESIGN.md` §8.9.11); `vibe-run` and `vibe:new` ran against a stand-in `vibe` only. Not tried on Windows. Design: `docs/VIBE-DESIGN.md` §8.
@@ -60,7 +62,8 @@ All notable changes to Diaulos. The format follows [Keep a Changelog](https://ke
 - Windows support.
 - Fixes from a cross audit with agy. Journal §13.
 
-[Unreleased]: https://github.com/Dr1mS/Diaulos/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Dr1mS/Diaulos/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Dr1mS/Diaulos/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Dr1mS/Diaulos/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Dr1mS/Diaulos/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Dr1mS/Diaulos/releases/tag/v0.1.0
