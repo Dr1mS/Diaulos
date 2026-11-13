@@ -153,7 +153,7 @@ Le destinataire répond à l'adresse `from` du message qu'il a reçu.
 | `vibe:<nom>` | Une conversation vibe renommée avec `/rename` (les majuscules comptent) |
 | `vibe@<partie-de-son-dossier>` | La conversation vibe dont le dossier contient ce texte : la seule ouverte dans une TUI, sinon la seule listée |
 | `vibe` | La seule conversation vibe ouverte dans une TUI |
-| `vibe:new`, `vibe:new@<nom>` | Une nouvelle conversation vibe lancée avec `vibe -p`, avec le message comme première demande |
+| `vibe:new`, `vibe:new@<nom>` | Une nouvelle conversation vibe lancée en arrière-plan en mode print (`vibe --prompt-file … --workdir`), avec le message comme première demande |
 | `ext:<nom>` | Un programme branché avec `watch ext:<nom>` |
 | `remote:<machine>/<adresse>` | Une session d'une machine appairée, par ex. `remote:laptop/claude:review` |
 
@@ -218,7 +218,7 @@ L'installeur copie un plugin vibe dans `~/.vibe/plugins/diaulos/` (`$VIBE_HOME/p
 | TUI lancée par `vibe-diaulos`, au travail | Il rejoint le tour en cours : vibe l'ajoute à ce tour et le modèle y répond, sans attendre la fin du tour et sans en lancer un nouveau |
 | TUI lancée par le vrai `vibe` (sans relais) | Il attend votre prochaine demande, qui l'emporte (`TUI: no relay, delivers at next message`) |
 | Relais qui a cessé de réveiller après 3 échecs de suite | Il attend votre prochaine demande (`TUI: relay stopped waking (3 failures), delivers at next message`) |
-| Fermée | Diaulos rouvre la même session en arrière-plan en mode print, `vibe --prompt-file … --resume` (processus `vibe-run`), fait un tour par lot de messages, puis s'arrête (`closed: wakes with vibe -p`). `vibe --resume <identifiant de session>` montre ensuite ce tour |
+| Fermée | Diaulos rouvre la même session en arrière-plan en mode print, `vibe --prompt-file … --resume` (processus `vibe-run`), fait un tour par lot de messages, puis s'arrête (`closed: wakes in print mode (vibe --prompt-file)`). `vibe --resume <identifiant de session>` montre ensuite ce tour |
 | Fermée, `vibe` introuvable | Il attend que vous ouvriez la conversation dans une TUI (`closed: waits until reopened (no vibe command)`) |
 | TUI ou relais tué au milieu d'une livraison | Le message retourne dans la boîte, sauf si la session le contient déjà : il n'est pas livré deux fois |
 
@@ -228,7 +228,7 @@ python3 ~/.agent-bridge/bridge.py send vibe:new@docs "Écris l'entrée du change
 ```
 
 - **Les tours en arrière-plan sont plafonnés** par les options de vibe elle-même, `--max-turns` (20) et `--max-price` (0,50 $), par lancement en arrière-plan. Ce n'est pas un budget total : chaque nouveau lancement repart de zéro, un aller-retour entre deux agents n'est pas plafonné, et quand un lancement traite plusieurs lots, ils se partagent son plafond. Les deux se changent dans `~/.agent-bridge/state/vibe-limits.json`, par exemple `{"max_turns": 10, "max_price": 0.20}`. Une TUI que vous lancez vous-même n'a pas de plafond posé par Diaulos.
-- **Un tour en arrière-plan ne peut rien vous demander.** `vibe -p` ne lance que les outils autorisés sans demande : un outil qui demande une autorisation échoue dans ce tour. Les outils du pont n'en demandent jamais.
+- **Un tour en arrière-plan ne peut rien vous demander.** vibe en mode print ne lance que les outils autorisés sans demande : un outil qui demande une autorisation échoue dans ce tour. Les outils du pont n'en demandent jamais.
 - **Un tour arrêté par une limite** est signalé à l'expéditeur, et le texte du message suivant dit que le tour précédent a été coupé, pour que vibe ne le finisse pas pour quelqu'un d'autre.
 - **Pas de relance en boucle.** Chaque message livré se termine par `If send answers with an error, do not call it again`, et `send` cesse d'appeler une adresse qui a échoué deux fois.
 - **Journaux :** `~/.agent-bridge/state/vibe-mcp.log` (les outils dans vibe), `vibe-hook.log` (les hooks), `vibe-relay.log` (le relais : méthodes, identifiants et tailles seulement, jamais le texte d'un message ; `AGENT_BRIDGE_VIBE_RELAY_LOG=0` le coupe), `vibe-<id>.log` (`vibe-run`), `vibe-new.log`.
@@ -346,7 +346,7 @@ Diaulos laisse des agents agir sur ce qu'ils reçoivent. Lisez ceci avant de bra
 - `agy:new`, le relais automatique et les conversations Desktop lues sur disque demandent Antigravity Desktop sous Linux.
 - Claude Code affiche un écran de confirmation à chaque lancement, tant que la préversion des channels l'exige.
 - Sous Windows, les règles d'autorisation de Claude Code ne couvrent pas les commandes PowerShell lancées par Claude : il peut demander confirmation avant d'exécuter les commandes du pont.
-- **Mistral Vibe.** Le relais qui réveille une TUI ouverte s'appuie sur le protocole du serveur d'application de vibe et sur son lanceur, que vibe ne documente pas ; une autre version peut les changer (`vibe-diaulos` ouvre alors vibe sans le relais et le dit, ou `list` montre `relay stopped waking`). Un message envoyé pendant un tour rejoint ce tour. `/clear` donne une nouvelle adresse à la conversation ; l'ancienne devient une conversation fermée. `/branch` fait une copie avec sa propre adresse, servie en arrière-plan ; la TUI garde son adresse. `vibe:new` ne peut pas ouvrir de fenêtre TUI : ouvrez la conversation avec `vibe-diaulos --resume <identifiant de session>`. Une conversation qui se termine avant son premier message enregistré n'est plus listée. Si vous ouvrez une conversation pendant qu'un tour en arrière-plan y tourne, vibe refuse d'un côté avec « Session is already open », et le message attend.
+- **Mistral Vibe.** Le relais qui réveille une TUI ouverte s'appuie sur le protocole du serveur d'application de vibe et sur son lanceur, que vibe ne documente pas ; une autre version peut les changer (`vibe-diaulos` ouvre alors vibe sans le relais et le dit, ou `list` montre `relay stopped waking`). Un message envoyé pendant un tour rejoint ce tour. `/clear` donne une nouvelle adresse à la conversation ; l'ancienne devient une conversation fermée. `/branch` fait une copie avec sa propre adresse, servie en arrière-plan ; la TUI garde son adresse. `vibe:new` ne peut pas ouvrir de fenêtre TUI : ouvrez la conversation avec `vibe-diaulos --resume <identifiant de session>`. Une conversation qui se termine avant son premier message enregistré n'est plus listée. Pendant environ une seconde, quand `vibe-diaulos --resume` ouvre une conversation, `list` montre en plus un `vibe:<id>` vide avec `TUI: wakes on message`, et la conversation reprise comme fermée ; un message envoyé à ce moment arrive quand même à la conversation reprise, une seule fois. Si vous ouvrez une conversation pendant qu'un tour en arrière-plan y tourne, vibe refuse d'un côté avec « Session is already open », et le message attend.
 
 **Versions testées**
 

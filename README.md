@@ -153,7 +153,7 @@ The receiver answers to the `from` address of the message it got.
 | `vibe:<name>` | A vibe conversation renamed with `/rename` (names are case-sensitive) |
 | `vibe@<part-of-its-folder>` | The vibe conversation whose folder contains that text: the only one open in a TUI, else the only listed one |
 | `vibe` | The only vibe conversation open in a TUI |
-| `vibe:new`, `vibe:new@<name>` | A new vibe conversation started with `vibe -p`, with the message as first prompt |
+| `vibe:new`, `vibe:new@<name>` | A new vibe conversation started in the background in print mode (`vibe --prompt-file … --workdir`), with the message as first prompt |
 | `ext:<name>` | A program connected with `watch ext:<name>` |
 | `remote:<machine>/<address>` | A session on a paired machine, e.g. `remote:laptop/claude:review` |
 
@@ -218,7 +218,7 @@ The installer copies a vibe plugin to `~/.vibe/plugins/diaulos/` (`$VIBE_HOME/pl
 | TUI started with `vibe-diaulos`, working | It joins the turn that is running: vibe adds it to that turn and the model answers it there, without waiting for the turn to end and without starting a new one |
 | TUI started with the real `vibe` (no relay) | It waits for your next prompt, which carries it (`TUI: no relay, delivers at next message`) |
 | Relay stopped waking after 3 failures in a row | It waits for your next prompt (`TUI: relay stopped waking (3 failures), delivers at next message`) |
-| Closed | Diaulos reopens the same session in the background in print mode, `vibe --prompt-file … --resume` (process `vibe-run`), runs one turn per batch, and exits (`closed: wakes with vibe -p`). `vibe --resume <session id>` then shows the turn |
+| Closed | Diaulos reopens the same session in the background in print mode, `vibe --prompt-file … --resume` (process `vibe-run`), runs one turn per batch, and exits (`closed: wakes in print mode (vibe --prompt-file)`). `vibe --resume <session id>` then shows the turn |
 | Closed, `vibe` not found | It waits until you open the conversation in a TUI (`closed: waits until reopened (no vibe command)`) |
 | TUI or relay killed in the middle of a delivery | The message goes back to the mailbox, unless the session already holds it, so it is not delivered twice |
 
@@ -228,7 +228,7 @@ python3 ~/.agent-bridge/bridge.py send vibe:new@docs "Write the changelog entry 
 ```
 
 - **Background turns are capped** by vibe's own `--max-turns` (20) and `--max-price` (0.50 $) per background run. This is not a total budget: each new run starts again from zero, a back-and-forth between two agents is not capped, and when one run handles several batches, they share its cap. Change both in `~/.agent-bridge/state/vibe-limits.json`, e.g. `{"max_turns": 10, "max_price": 0.20}`. A TUI you start yourself has no cap from Diaulos.
-- **A background turn cannot ask you anything.** `vibe -p` runs only the tools allowed without asking, so a tool that needs approval fails in that turn. The bridge tools never ask.
+- **A background turn cannot ask you anything.** vibe in print mode runs only the tools allowed without asking, so a tool that needs approval fails in that turn. The bridge tools never ask.
 - **A turn stopped by a limit** is reported to the sender, and the next message's text says that the previous turn was cut, so vibe does not finish it for someone else.
 - **No retry loops.** Each delivered message ends with `If send answers with an error, do not call it again`, and `send` stops calling an address that failed twice.
 - **Logs:** `~/.agent-bridge/state/vibe-mcp.log` (the tools inside vibe), `vibe-hook.log` (the hooks), `vibe-relay.log` (the relay: methods, ids and sizes only, never a message text; `AGENT_BRIDGE_VIBE_RELAY_LOG=0` turns it off), `vibe-<id>.log` (`vibe-run`), `vibe-new.log`.
@@ -346,7 +346,7 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 - `agy:new`, the auto-relay and Desktop conversations read from disk need Antigravity Desktop on Linux.
 - Claude Code shows a confirmation screen at every launch while the channels preview requires it.
 - On Windows, Claude Code's permission rules do not cover PowerShell commands run by Claude: it may ask before running bridge commands.
-- **Mistral Vibe.** The relay that wakes an open TUI relies on vibe's app-server protocol and launcher, which vibe does not document; another version may change them (`vibe-diaulos` then opens vibe without the relay and says so, or `list` shows `relay stopped waking`). A message sent while a turn runs joins that turn. `/clear` gives the conversation a new address; the old one becomes a closed conversation. `/branch` makes a copy with its own address, served in the background; the TUI keeps its address. `vibe:new` cannot open a TUI window: open it with `vibe-diaulos --resume <session id>`. A conversation that ends before its first saved message is no longer listed. If you open a conversation while a background turn runs in it, vibe refuses with "Session is already open" on one side, and the message waits.
+- **Mistral Vibe.** The relay that wakes an open TUI relies on vibe's app-server protocol and launcher, which vibe does not document; another version may change them (`vibe-diaulos` then opens vibe without the relay and says so, or `list` shows `relay stopped waking`). A message sent while a turn runs joins that turn. `/clear` gives the conversation a new address; the old one becomes a closed conversation. `/branch` makes a copy with its own address, served in the background; the TUI keeps its address. `vibe:new` cannot open a TUI window: open it with `vibe-diaulos --resume <session id>`. A conversation that ends before its first saved message is no longer listed. For about a second while `vibe-diaulos --resume` opens a conversation, `list` shows an extra empty `vibe:<id>` with `TUI: wakes on message` and the resumed conversation as closed; a message sent then still reaches the resumed conversation, once. If you open a conversation while a background turn runs in it, vibe refuses with "Session is already open" on one side, and the message waits.
 
 **Tested with**
 
