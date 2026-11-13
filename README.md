@@ -18,7 +18,7 @@ Claude Code ⇄ Google Antigravity (agy) ⇄ Mistral Vibe · on one machine or a
 
 You run Claude Code in one terminal and Gemini in another. One writes the code, the other should review it, and **you** are the one copy-pasting between them, or waking up the one that went idle.
 
-**Diaulos removes you from that loop.** Any session can send a message to any other one, and the message **wakes the receiver even when it is idle**. An agy CLI or Mistral Vibe conversation is reached even with its terminal closed, and a session on another paired machine through its gateway. Each tool is woken through its own extension points: Claude Code through an MCP channel, agy through its own language server, Mistral Vibe through a tool file it loads itself. No agent polls its inbox and nothing types into a terminal: small helper processes watch the mailbox and wake an agent only when a message is waiting.
+**Diaulos removes you from that loop.** Any session can send a message to any other one, and the message **wakes the receiver even when it is idle**. An agy CLI or Mistral Vibe conversation is reached even with its terminal closed, and a session on another paired machine through its gateway. Each tool is woken through its own extension points: Claude Code through an MCP channel, agy through its own language server, Mistral Vibe through a native plugin and a small relay in front of its app server. No agent polls its inbox and nothing types into a terminal: small helper processes watch the mailbox and wake an agent only when a message is waiting.
 
 ```text
 you › ask the agy session in ~/api to review my last commit, and tell me what it finds
@@ -54,8 +54,8 @@ A session is woken **only when a message is waiting for it**, and messages that 
 
 - **Cross-vendor messaging** — Claude Code ⇄ Claude Code, agy ⇄ agy, Claude ⇄ agy, any number of sessions, in any directory.
 - **Wake-on-message** — idle Claude Code and agy sessions take their turn by themselves when a message arrives.
-- **Closed terminals still answer** — a message to an agy CLI conversation whose terminal is closed runs one turn with `agy -p`; a closed Mistral Vibe conversation runs one turn with `vibe-acp`, in the same session.
-- **Mistral Vibe** — a vibe conversation sends and lists with two native tools, and an open vibe takes a message as its next prompt when it is idle, without anyone typing. See [Mistral Vibe](#mistral-vibe).
+- **Closed terminals still answer** — a message to an agy CLI conversation whose terminal is closed runs one turn with `agy -p`; a closed Mistral Vibe conversation runs one turn with `vibe -p --resume`, in the same session.
+- **Mistral Vibe** — a vibe conversation sends and lists with two native tools, and a vibe TUI started with `vibe-diaulos` (or a plain `vibe` after `--shell`) takes a message by itself when it is idle, without anyone typing. See [Mistral Vibe](#mistral-vibe).
 - **Spawn new sessions** — `agy:new-cli` / `agy:new` start a new agy session with the message as its first prompt.
 - **Other machines** — pair two computers once, then `send remote:laptop/claude:review "…"`. Outgoing connections only (HTTPS to ntfy.sh by default), ChaCha20-Poly1305 end to end, through ntfy.sh or your own relay.
 - **Programs as peers** — a script, a CI job or a bot joins as `ext:<name>` and reads the agent's replies.
@@ -89,7 +89,7 @@ A session is woken **only when a message is waiting for it**, and messages that 
 
 ## Installation
 
-Requirements: Linux or Windows 10/11, Python 3.8 or later, the agy CLI or Antigravity Desktop, Claude Code if you want Claude sessions to join, and Mistral Vibe 2.20 (`mistral-vibe`) if you want vibe sessions to join (the vibe part is tested on Linux only; nothing of it has run on Windows yet).
+Requirements: Linux or Windows 10/11, Python 3.8 or later, the agy CLI or Antigravity Desktop, Claude Code if you want Claude sessions to join, and Mistral Vibe 3 or later (`mistral-vibe`) if you want vibe sessions to join (the vibe part is tested on Linux only; nothing of it has run on Windows yet).
 
 ```bash
 git clone https://github.com/Dr1mS/Diaulos && cd Diaulos
@@ -104,10 +104,10 @@ On Linux with Antigravity Desktop, add `--auto-relay` (experimental: see [Antigr
 
 Then:
 
-1. **Restart your agy and vibe sessions.** agy loads hooks, and vibe its tools, only at startup.
+1. **Restart your agy and vibe sessions.** agy loads hooks, and vibe its plugins, only at startup. With `--shell`, a plain `vibe` in a new terminal opens with the Diaulos relay; without it, start vibe with `~/.agent-bridge/vibe-diaulos`.
 2. **Open a new terminal for Claude Code.** With `--shell` / `-Shell`, a plain `claude` starts with the bridge channel; Claude Code shows a confirmation screen for it at each launch.
 
-**Installed Mistral Vibe after Diaulos?** Run the installer again: it skips vibe when it finds neither `vibe` nor `~/.vibe`.
+**Installed or updated Mistral Vibe after Diaulos?** Run the installer again: it skips vibe when it finds neither `vibe` nor `~/.vibe`, and below vibe 3 it says "Diaulos needs Mistral Vibe 3 or later".
 
 **Updating:** `git pull`, then run the installer again with the same options, and restart your sessions. A session started before the update keeps the old code.
 
@@ -115,7 +115,7 @@ Then:
 
 ## Quick start
 
-You do not have to type commands: each agent knows its own address and how to reach the others. agy is told at startup by its hook; Claude Code gets the `send` and `list_agents` tools of the `agent-bridge` MCP server; Mistral Vibe gets the `bridge_send` and `bridge_list_agents` tools. Just ask:
+You do not have to type commands: each agent knows its own address and how to reach the others. agy is told at startup by its hook; Claude Code gets the `send` and `list_agents` tools of the `agent-bridge` MCP server; Mistral Vibe gets the `send` and `list_agents` tools of its `diaulos` MCP server. Just ask:
 
 - in Claude Code: *"send this diff to agy for a review"*;
 - in agy: *"ask the Claude session to check the tests"*;
@@ -149,15 +149,15 @@ The receiver answers to the `from` address of the message it got.
 | `agy` | The only other active agy session: an agy CLI that runs, or a conversation its Desktop window has loaded |
 | `agy:new`, `agy:new@<title>` | A new Antigravity Desktop conversation, with the message as first prompt (Linux) |
 | `agy:new-cli`, `agy:new-cli@<name>` | A new agy CLI conversation, with the message as first prompt |
-| `vibe:<id>` | One Mistral Vibe conversation: the last 12 hex digits of its session id, which stay the same after `/compact` and `/clear`. A prefix works when only one conversation matches |
+| `vibe:<id>` | One Mistral Vibe conversation: the last 12 hex digits of its session id. They stay the same after `/compact`; `/clear` starts a new conversation with a new id, and the old one becomes a closed conversation. A prefix works when only one conversation matches |
 | `vibe:<name>` | A vibe conversation renamed with `/rename` (names are case-sensitive) |
 | `vibe@<part-of-its-folder>` | The vibe conversation whose folder contains that text: the only one open in a TUI, else the only listed one |
 | `vibe` | The only vibe conversation open in a TUI |
-| `vibe:new`, `vibe:new@<name>` | A new vibe conversation started with `vibe-acp`, with the message as first prompt |
+| `vibe:new`, `vibe:new@<name>` | A new vibe conversation started with `vibe -p`, with the message as first prompt |
 | `ext:<name>` | A program connected with `watch ext:<name>` |
 | `remote:<machine>/<address>` | A session on a paired machine, e.g. `remote:laptop/claude:review` |
 
-`bridge.py` is `~/.agent-bridge/bridge.py`. The MCP tools of Claude Code take the same addresses and options. vibe's `bridge_send` takes the same addresses but no `--workspace`: a `vibe:new` or `agy:new-cli` it starts works in vibe's own directory, an `agy:new` in the relay's workspace. The answer of `send` gives the address it resolved, not the one you typed: `send vibe:docs …` answers `sent <id> … to vibe:8d1107699082`. `list` shows which name goes with which id.
+`bridge.py` is `~/.agent-bridge/bridge.py`. The MCP tools of Claude Code take the same addresses and options. vibe's `send` takes the same addresses, and `workspace` for `agy:new`, `agy:new-cli` and `vibe:new`. The answer of `send` gives the address it resolved, not the one you typed: `send vibe:docs …` answers `sent <id> … to vibe:8d1107699082`. `list` shows which name goes with which id.
 
 | Command | What it does |
 |---|---|
@@ -208,30 +208,30 @@ python3 ~/.agent-bridge/bridge.py send agy:new@tester "Run the test suite and se
 
 ## Mistral Vibe
 
-A vibe conversation can send to and list the other agents, and it receives their messages whether its TUI is idle, working or closed. Tested on Linux only; Windows is untested for the vibe part.
+A vibe conversation can send to and list the other agents, and it receives their messages whether its TUI is idle, working or closed. Needs Mistral Vibe 3 (tested with 3.1.2); vibe 2.20 is no longer supported. Tested on Linux only; Windows is untested for the vibe part.
 
-The installer writes one file, `~/.vibe/tools/agent_bridge.py` (`$VIBE_HOME/tools/` if set), and edits no vibe config. vibe loads it at startup in every mode (TUI, `vibe -p`, `vibe-acp`). It gives vibe two tools, `bridge_send` and `bridge_list_agents`, that run without asking for approval, and it delivers messages to an open TUI.
+The installer copies a vibe plugin to `~/.vibe/plugins/diaulos/` (`$VIBE_HOME/plugins/` if set): an MCP server `diaulos` with the tools `send` and `list_agents`, two hooks (`session_start` tells the conversation its address, `pre_agent` adds waiting messages to your next prompt) and a skill. It adds one marked block to `~/.vibe/config.toml`, after a backup, so that both tools run without asking for approval, and stops without writing anything if that file already has an MCP server named `diaulos`. It also writes the command `~/.agent-bridge/vibe-diaulos`, which opens vibe's TUI with a small Diaulos relay between the TUI and vibe's app server: the relay is what lets a message wake an idle TUI. With `--shell`, a `vibe()` function runs it for a plain `vibe`; `-p`, `mcp`, `config`, `update`, `--version`, `--help` and the other non-TUI uses go to the real `vibe` unchanged, `command vibe` (`vibe.exe` in PowerShell) skips the function, and `AGENT_BRIDGE_VIBE_RELAY=0` turns it off for a shell.
 
 | | What happens to a message |
 |---|---|
-| TUI open, idle | It becomes the next prompt, about 1 s after it arrives (0.7 to 1.0 s measured; `list`: `TUI: wakes on message`). This holds before the first prompt too, at the `vibe:<id>` that `list` shows |
-| TUI open, working | It waits in the mailbox and goes in about 1 s after the turn ends. Prompts you queued go first; it never cuts your turn |
-| TUI open, after Esc with prompts queued | It waits until you press Enter and the queue drains (`TUI, paused (Esc): delivers after Enter`) |
-| TUI open, running a `!` command | It waits for the command to end |
-| Closed | Diaulos reopens the same session in the background with `vibe-acp` (process `vibe-run`), runs one turn per batch, and exits (`closed: wakes with vibe-acp`). `vibe --resume <session id>` then shows the turn |
-| Closed, `vibe-acp` not found | It waits until you open the conversation in a TUI (`closed: waits until reopened (no vibe-acp)`) |
-| TUI killed in the middle of a delivered turn | The message is delivered again by `vibe-run`; it can then appear twice in the history. Except during the very first turn of a new conversation: see [Status and limits](#status-and-limits) |
+| TUI started with `vibe-diaulos`, idle | It starts a turn by itself. The relay checks the mailbox every 0.5 s, and the turn starts about 0.5 s after it sends the message (measured on Linux, vibe 3.1.2). The TUI shows the sender and the text above the answer (`list`: `TUI: wakes on message`). This holds before your first prompt too |
+| TUI started with `vibe-diaulos`, working | It joins the turn that is running: vibe adds it to that turn and the model answers it there, without waiting for the turn to end and without starting a new one |
+| TUI started with the real `vibe` (no relay) | It waits for your next prompt, which carries it (`TUI: no relay, delivers at next message`) |
+| Relay stopped waking after 3 failures in a row | It waits for your next prompt (`TUI: relay stopped waking (3 failures), delivers at next message`) |
+| Closed | Diaulos reopens the same session in the background with `vibe -p --resume` (process `vibe-run`), runs one turn per batch, and exits (`closed: wakes with vibe -p`). `vibe --resume <session id>` then shows the turn |
+| Closed, `vibe` not found | It waits until you open the conversation in a TUI (`closed: waits until reopened (no vibe command)`) |
+| TUI or relay killed in the middle of a delivery | The message goes back to the mailbox, unless the session already holds it, so it is not delivered twice |
 
 ```bash
 python3 ~/.agent-bridge/bridge.py send vibe:new@docs "Write the changelog entry for the last commit" --workspace ~/projects/web
-# the bridge sends you vibe:<id>; the conversation is also reachable as vibe:docs, and opens with vibe --resume <session id>
+# the bridge sends you vibe:<id>; the conversation is also reachable as vibe:docs, and opens with vibe-diaulos --resume <session id>
 ```
 
-- **Background turns are capped.** `vibe-run` and `vibe:new` stop after `max_turns` (20) and, best effort, at a price cap of at most about $0.50 per background run (checked before each model call, so a run can end slightly above it). This is not a total budget: each new run starts again from zero, a back-and-forth between two agents is not capped, and when one run handles several batches, they share its cap. Change both in `~/.agent-bridge/state/vibe-limits.json`, e.g. `{"max_turns": 10, "max_price": 0.20}`. The price cap uses vibe internals: if a vibe update breaks it, `list` adds `price cap not set, max_turns only` and only `max_turns` holds. A TUI you start yourself has no price cap from Diaulos.
-- **A background turn cannot ask you anything.** `vibe-run` refuses every approval request (`reject_once`), so a tool that needs approval fails in that turn. The bridge tools never ask.
+- **Background turns are capped** by vibe's own `--max-turns` (20) and `--max-price` (0.50 $) per background run. This is not a total budget: each new run starts again from zero, a back-and-forth between two agents is not capped, and when one run handles several batches, they share its cap. Change both in `~/.agent-bridge/state/vibe-limits.json`, e.g. `{"max_turns": 10, "max_price": 0.20}`. A TUI you start yourself has no cap from Diaulos.
+- **A background turn cannot ask you anything.** `vibe -p` runs only the tools allowed without asking, so a tool that needs approval fails in that turn. The bridge tools never ask.
 - **A turn stopped by a limit** is reported to the sender, and the next message's text says that the previous turn was cut, so vibe does not finish it for someone else.
-- **No retry loops.** Each delivered message ends with `If bridge_send answers with an error, do not call it again`, and `bridge_send` stops calling an address that failed twice.
-- **Logs:** `~/.agent-bridge/state/vibe-plugin.log` (the tools inside vibe), `vibe-<id>.log` (`vibe-run`), `vibe-new.log`.
+- **No retry loops.** Each delivered message ends with `If send answers with an error, do not call it again`, and `send` stops calling an address that failed twice.
+- **Logs:** `~/.agent-bridge/state/vibe-mcp.log` (the tools inside vibe), `vibe-hook.log` (the hooks), `vibe-relay.log` (the relay: methods, ids and sizes only, never a message text; `AGENT_BRIDGE_VIBE_RELAY_LOG=0` turns it off), `vibe-<id>.log` (`vibe-run`), `vibe-new.log`.
 
 ## Other machines
 
@@ -328,9 +328,10 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 | A Claude session is not listed | Only sessions started with the channel are listed. Without the channel, a `Monitor` on `python3 -u ~/.agent-bridge/bridge.py watch claude` reads the shared `claude` inbox. |
 | `not delivered ... kept in the inbox, retry in 10s` (relay log) | agy's language server is busy or unreachable for a moment; the message is retried automatically. |
 | `'agy' matches 2 live agy peers` | Pick one with `agy@<directory>`, `agy:<id-prefix>` or `agy:<name>`. |
-| `list` shows a vibe TUI with `no injection` | A vibe update changed the internals Diaulos uses: messages wait until vibe exits; `vibe-run` then delivers them within about 30 s when a Claude Code session with the channel is open, otherwise with the next message sent to that conversation. Read `~/.agent-bridge/state/vibe-plugin.log`. |
+| vibe's TUI says "App server closed unexpectedly. Press Ctrl+C to exit." | The Diaulos relay stopped. Your conversation is saved: press Ctrl+C, then run `vibe-diaulos --resume <session id>` (or `vibe-diaulos -c`). Read `~/.agent-bridge/state/vibe-relay.log`. Messages sent meanwhile wait in the mailbox and are delivered once the conversation is closed or reopened. |
 | A message to a closed vibe conversation gets no answer | Read `~/.agent-bridge/state/vibe-<id>.log`. After 3 failed attempts the sender gets a note and the message is kept as `.failed`. |
-| vibe has no `bridge_send` tool | Restart vibe, and check `~/.vibe/tools/agent_bridge.py` and `vibe-plugin.log`. |
+| vibe has no `send` tool of the `diaulos` server | Restart vibe. Run the installer again and read what it says for vibe: it stops if `~/.vibe/config.toml` already has an MCP server named `diaulos` (rename or remove it). A project `.vibe/config.toml` with a `diaulos` server also hides ours: vibe then shows its own warning. Read `vibe-mcp.log`. |
+| `list` shows a vibe TUI with `no relay, delivers at next message` | That TUI was opened with the real `vibe`. Close it and open the conversation with `vibe-diaulos --resume <session id>` (or a plain `vibe` after `--shell`). If `vibe-diaulos` prints that there is no relay for this vibe version, a vibe update changed what the relay uses: messages arrive with your next prompt until Diaulos is updated. |
 | `'claude:<name>' matches 0 live claude peers` | That session ended, was renamed, or has no channel. Run `bridge.py list`. |
 | `bridge.py remote …` prints the general usage | The installed copy is older: run the installer again. |
 | `needs a person at a terminal` | Run the command yourself in a real terminal (not through an agent, not with `!` in Claude Code). |
@@ -345,13 +346,13 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 - `agy:new`, the auto-relay and Desktop conversations read from disk need Antigravity Desktop on Linux.
 - Claude Code shows a confirmation screen at every launch while the channels preview requires it.
 - On Windows, Claude Code's permission rules do not cover PowerShell commands run by Claude: it may ask before running bridge commands.
-- **Mistral Vibe.** Waking an open TUI and the price cap of background turns use vibe internals, checked on vibe 2.20.0; another version may lose them (`list` then says `no injection` or `price cap not set`). A message never goes in the middle of a turn, only after it. If a TUI is killed during a delivered turn, the message is delivered again: within about 60 s when a Claude Code session with the channel is open, otherwise at the next Diaulos command (`list`, `send`); it can then appear twice in vibe's history. If the TUI is killed during the very first turn of a new conversation, vibe has saved nothing yet: `vibe-run` cannot reopen it, the message is kept as `.failed` after 3 attempts, and the sender gets a note saying it was not delivered. `vibe:new` cannot open a TUI window: open it with `vibe --resume <session id>`. The automatic title of a conversation started by a message is the bridge header, until you `/rename` it. Inside `vibe -p`, `bridge_list_agents` does not show its own conversation. A `/rename` typed before the first turn of a new conversation reaches Diaulos only when that turn ends: until then, `vibe:<name>` is refused (use `vibe:<id>`). When a TUI ends because its terminal was closed, its pid can stay in the peer file; `list` still shows the right state, because it checks that the pid is alive. If you open a conversation while a background turn runs in it, both write the same session; vibe shows a notice.
+- **Mistral Vibe.** The relay that wakes an open TUI relies on vibe's app-server protocol and launcher, which vibe does not document; another version may change them (`vibe-diaulos` then opens vibe without the relay and says so, or `list` shows `relay stopped waking`). A message sent while a turn runs joins that turn. `/clear` gives the conversation a new address; the old one becomes a closed conversation. `/branch` makes a copy with its own address, served in the background; the TUI keeps its address. `vibe:new` cannot open a TUI window: open it with `vibe-diaulos --resume <session id>`. A conversation that ends before its first saved message is no longer listed. If you open a conversation while a background turn runs in it, vibe refuses with "Session is already open" on one side, and the message waits.
 
 **Tested with**
 
 - Linux, Claude Code 2.1.301, agy 1.4.9 (language server 1.4.0, Gemini 3.8 Flash): messaging and waking idle sessions with the agy CLI, Antigravity Desktop and Antigravity IDE; on Desktop, the shared relay, the auto-relay, a conversation not loaded since launch and `agy:new`; with the agy CLI, a closed terminal and `agy:new-cli`. Not verified yet: the newer Desktop features on the IDE, and the listening `Stop` hook on Desktop and IDE.
 - Windows 11, Claude Code 2.1.296, agy (language server 1.4.0), Python 3.14: hooks, relay waking an idle agy, MCP channel waking an interactive Claude session, and messages both ways.
-- Mistral Vibe (2026-11-12): Linux, vibe 2.20.0 with `devstral-small`, Python 3.12: send from the TUI, `vibe -p` and `vibe-acp`; waking an idle TUI (0.7 to 1.0 s); delivery after a busy turn; a closed conversation (same session); `vibe:new`; names and prefixes; the price cap; a TUI killed mid-turn. Not tried yet: a live Claude Code session (vibe to Claude was checked on the mailbox only); the Esc and `!` rows of the table above; Windows: nothing of the vibe part ran there.
+- Mistral Vibe (2026-11-13): Linux, vibe 3.1.2 with `devstral-small`: the plugin and its tools; `vibe-diaulos` and the routing of the non-TUI uses; waking an idle TUI, before and after the first prompt; a message during a running turn; the sender and text shown on screen; typing, Esc and simultaneous sends during a delivered turn; Ctrl+C, closing the terminal and a killed relay; `/clear`, `/branch` and `--resume`; the relay log. `vibe-run` and `vibe:new` ran against a stand-in `vibe` only. Not tried yet: Windows (nothing of the vibe part ran there).
 - Other machines (2026-11-06): a Linux machine and a second computer on another network, paired through ntfy.sh, a Claude Code session on each side: a refusal and its notice, then a message and its reply. Not verified yet: the gateway on a real Windows machine (the test suite passes on Windows in CI).
 
 ## How it works
@@ -360,9 +361,9 @@ Claude Code and agy share no protocol, so Diaulos uses a file mailbox in `~/.age
 
 <p align="center"><img src="docs/images/architecture.svg" alt="Senders write to the ~/.agent-bridge mailbox; Claude is woken by its MCP channel, agy by its language server or agy -p, and remote messages go through the gateway" width="900"></p>
 
-A reader claims a message atomically by moving it to `archive/`, so two readers never get the same one. If the delivery fails, the message goes back to the inbox and is retried; a reader killed in mid-delivery can lose it. An open vibe gets the message from inside its own process, through the tool file vibe loads; a closed one through `vibe-acp`. Every detail, including the full list of what the installer changes, is in [docs/INTERNALS.md](docs/INTERNALS.md).
+A reader claims a message atomically by moving it to `archive/`, so two readers never get the same one. If the delivery fails, the message goes back to the inbox and is retried; a reader killed in mid-delivery can lose it. An open vibe TUI gets the message from the Diaulos relay between the TUI and vibe's app server, as vibe's own "message from another session"; a closed one through `vibe -p --resume`. Every detail, including the full list of what the installer changes, is in [docs/INTERNALS.md](docs/INTERNALS.md).
 
-**What gets installed:** `~/.agent-bridge/` (the bridge and its data), `~/.vibe/tools/agent_bridge.py` when vibe is installed, global agy hooks in `~/.gemini/config/hooks.json`, the `agent-bridge` MCP server for Claude Code (user scope), the `agy-bridge` and `diaulos-remote` skills in `~/.claude/skills/`, allow rules in `~/.claude/settings.json`, and with `--shell` / `-Shell` the `claude` wrapper (`~/.bashrc`, PowerShell profile, cmd `AutoRun`). Each config file is backed up first as `<file>.bak-agent-bridge`, and the uninstaller reverts these changes (mailboxes and keys stay unless `--purge`).
+**What gets installed:** `~/.agent-bridge/` (the bridge and its data), the `diaulos` plugin in `~/.vibe/plugins/`, one marked block in `~/.vibe/config.toml` and `~/.agent-bridge/vibe-diaulos` when vibe 3 is installed, global agy hooks in `~/.gemini/config/hooks.json`, the `agent-bridge` MCP server for Claude Code (user scope), the `agy-bridge` and `diaulos-remote` skills in `~/.claude/skills/`, allow rules in `~/.claude/settings.json`, and with `--shell` / `-Shell` the `claude` wrapper (`~/.bashrc`, PowerShell profile, cmd `AutoRun`) and the `vibe` function (`~/.bashrc`, PowerShell profile). Each config file is backed up first as `<file>.bak-agent-bridge`, and the uninstaller reverts these changes (mailboxes and keys stay unless `--purge`).
 
 ## Development
 
