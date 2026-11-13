@@ -1,6 +1,6 @@
 # Mistral Vibe in Diaulos: design
 
-Status: J1 design, validated by Adrien on 2026-11-12 (review PASS T1/07, then its reserves and the price-cap decision applied). Target: `vibe 2.20.0` (`mistral-vibe` on PyPI), Linux and Windows.
+Status: J1 design, validated by Adrien on 2026-11-12 (review PASS T1/07, then its reserves and the price-cap decision applied). Target: `vibe 2.20.0` (`mistral-vibe` on PyPI), Linux and Windows. §8 (validated by Adrien on 2026-11-13, dropping vibe 2.20) moves the design to vibe 3.x.
 
 Mistral Vibe becomes a third kind of agent, next to Claude Code and agy. A vibe conversation has an address `vibe:<key>`. It lists the other agents, writes to them, and receives their messages whether it is working, idle or closed, with nobody typing in vibe.
 
@@ -199,3 +199,74 @@ Order: T5a, then T3a, then T3b and T3c in parallel (separate files), then T4, th
 - **`gc` scan to find `VibeApp`**: one pass of about 0.6 s at start (probe p3), then never again.
 - **A person opening a session during a background turn** (§4.5): reduced, not removed.
 - **The person's own MCP servers start in `vibe-run` too** (only `config.toml` counts, probe A3), as when they open the session themselves.
+
+## 8. Moving to vibe 3.x (T10c)
+
+Status: validated by Adrien on 2026-11-13 (review PASS T10/08), with his decision to drop vibe 2.20 (§8.5). Adrien updated vibe to 3.1.2, and the whole vibe part of Diaulos stopped working. This section says what replaces it. Evidence is the T10a run of `run-proofs.sh` (152 tests, 7 FAIL, 1 ERROR) and the Programmer's T10b probes (`tests/vibe3/probe_mcp.py`, `probe_hook.py`, `tui_probe.py`, throwaway `VIBE_HOME`, devstral-small). The vibe reference is the skill that vibe 3.1.2 ships, `plugins/builtins/vibe/skills/vibe/SKILL.md` (**skill** below, with its line).
+
+### 8.1 What changed in vibe 3.x
+
+- **Custom Python tools are gone.** vibe lists `~/.vibe/tools/*.py` without importing them and warns at every start: "Custom Python tool `agent_bridge` is no longer supported and was not loaded" (src `app_server/_ignored_tool_settings.py`). Our shim no longer loads, so `bridge_send`, `bridge_list_agents` and the TUI plugin are all dead.
+- **The TUI is a Rust binary** (`_bin/vibe-rs`). `cli/textual_ui` no longer exists. Python runs only in `vibe-app-server`, which the TUI starts on stdio. Nothing of the 2.20 delivery (§4.2, §5) can be carried over: there is no Python TUI object left to patch.
+- **What vibe offers instead**: stdio MCP servers, hooks (`session_start`, `pre_agent`, `post_agent`, `pre_tool`, `post_tool`, `notification`, `session_end`), skills, and native plugins that bundle MCP servers, hooks and skills in one folder under `~/.vibe/plugins/` (skill 747-1052, 1438-1516).
+- **Sessions** live in `<save_dir>/unified/<uuid>/` (`meta.json`, `journal/*.jsonl`, `CURRENT`, …), without `messages.jsonl`. `meta.json` no longer has `session_cost`; vibe still computes it (src `app_server/models.py:484`) and vibe-acp sends it (src `acp/agent.py:1792-1795`). `vibe_sessions.py` sees 0 of 7 sessions, so `list` shows no vibe address. The uuid keeps its 8-4-4-4-12 form.
+- **A session is held by one process.** While a TUI has it open, `vibe -p --resume <id>` exits with rc 2, "Error: Session is already open: <id>", and `vibe-acp` `session/load` answers error -31002 with the same text (probe Q6).
+- **`vibe -p` has its own caps**: `--max-price` (cumulative cost of the run's root session and subagents), `--max-turns`, `--max-tokens`, `--time-limit`, `--output json`, `--prompt-file`. `vibe -p --resume <id>` on a closed session keeps its id and its context (probe Q7).
+
+### 8.2 Decision
+
+Diaulos ships a native vibe plugin, `~/.vibe/plugins/diaulos/`, copied by the installer from `install/vibe-plugin/` in the repository. It holds six parts:
+
+| Part | File | Role |
+|---|---|---|
+| manifest | `plugin.json`, with the `ai.mistral.vibe` extension (`schemaVersion` 1, `toolNamespace` `diaulos`) | names the plugin; without this extension vibe loads none of its hooks (skill 1486) |
+| MCP server | `mcp.json`, starting `~/.agent-bridge/vibe_mcp.py` | the tools `bridge_send` and `bridge_list_agents` (server alias `bridge`, remote names `send` and `list_agents`) |
+| `session_start` hook | `ai.mistral.vibe/hooks.toml`, running `~/.agent-bridge/vibe_hook.py` | registers the session as a peer, and tells the model its address |
+| `post_agent` hook | same file | delivers waiting messages when a turn ends, and listens for new ones (§8.3) |
+| `pre_agent` hook | same file | adds messages that waited to the person's next message |
+| skill | `skills/diaulos/SKILL.md` | how to answer, the addresses, the anti-retry rule (§4.1) |
+
+Why a plugin, not lines in the person's `config.toml` and `hooks.toml`: one folder to copy and to remove, nothing merged into the person's files, and no clash with an existing `mcp_servers = []` line (T10b found that one breaks a `[[mcp_servers]]` block). Gate G2 says whether one line of `config.toml` is still needed for the permission.
+
+Why MCP for the tools, not a skill alone: with a skill, each send is a `bash` call that asks for approval, and the message text must be quoted for the shell. An MCP tool takes `to` and `text` as JSON, can run with `permission = "always"` (probe Q2: the key is `[tools.<alias>_<remote name>]`), and returns the same errors as today.
+
+**Identity.** One MCP process serves one `vibe-app-server`, not one session, and gets no session id (probe Q1). The `session_start` hook gets it (`session_id`, `transcript_path`, `cwd`, `source`). It writes `state/vibe-current/<app-server pid>.json` with the current main session. `vibe_mcp.py` reads the file of its parent pid at each call, so `/resume`, `/clear` and a fork are followed. The address stays `vibe:<last 12 hex of the uuid>`, and `vibe:<name>` after `/rename`. A subagent sends as its main session, since `session_start` never runs for subagents.
+
+### 8.3 Delivery
+
+| vibe state | 2.20 design | 3.x design |
+|---|---|---|
+| Working | after the turn, by the plugin | after the turn: the `post_agent` hook claims the waiting messages and answers `{"decision": "deny", "reason": <bridge header + messages>}`, which vibe sends to the model as a retry message (probe Q3) |
+| Idle after a turn | woken in about 1 s | the same `post_agent` hook keeps listening after the turn ends (a long poll on the inbox, like agy's listening `Stop` hook), and answers as above when a message arrives. The TUI stays usable while it waits (probe Q4: keys echoed 0.21 s later). Gate G1 |
+| Idle before the first message | woken | not woken: no hook runs before the first message. The message waits for the `pre_agent` hook (the person's first message) or for the TUI to close |
+| Closed | `vibe-run` with `vibe-acp` and the plugin's price cap | `vibe-run` with `vibe -p --resume <id> --prompt-file <message> --max-price 0.50 --max-turns <n> --output json`. "Session is already open" is not a failure: the TUI came back, and the message waits for it |
+| New (`vibe:new`) | `vibe-acp` | `vibe -p --workdir <dir> --prompt-file … --max-price 0.50 --output json`; the new id comes from the JSON output |
+
+Limits that come with it:
+
+- **Three wakes per turn.** vibe accepts at most 3 `post_agent` retries per turn (`_MAX_POST_AGENT_RETRIES`). The hook puts every waiting message in one retry. After the third, it stops listening, and the next messages wait for the person's next message (`pre_agent`) or for the TUI to close.
+- **The person does not see the message text.** The TUI shows "Requested turn revision" and the hook name, not the reason (probe Q3). Gate G3 tries `system_message` to show "Diaulos: message from <sender>".
+- **The hook ends on its own** a few seconds before its `timeout` (vibe kills the process tree at the timeout), with an empty answer, so the turn is accepted.
+- **The price cap is vibe's own** and covers the whole background run, subagents included. It is still per run, not a total budget. `vibe-run` reads the cost from `export.json` (`--output-dir`) for its log.
+- **The rule "never in the middle of a turn" stays.** `post_tool` could append a message to a tool result mid-turn; Diaulos does not use it.
+
+Not chosen: the built-in `cron` tool with a `pre_agent` hook that answers `deny` when the inbox is empty. It would wake an idle TUI every 30 s at no model cost (T10b: a denied turn has no `tokenUsage`), but each denied turn shows "Blocked the message: …" at error level, so a red line every 30 s, and the model has to create the cron itself. To try only if G1 fails.
+
+### 8.4 Gates for the Programmer, before the code
+
+- **G1, listening `post_agent`.** In the real TUI: a message typed and sent with Enter while the hook listens. Is it handled at once (the hook stopped or ignored), or does it wait for the hook? Does the TUI show the turn as running? Does Esc stop the hook? If the person's message waits, the listening part is dropped: the hook only delivers what is already waiting, and an idle TUI is not woken.
+- **G2, permission in a plugin.** The tool key of a plugin MCP server (`[tools.<?>_send]`), and whether `permission = "always"` can come from the plugin. If not, the installer adds one marked block to `config.toml`, after a backup, and the uninstaller removes it.
+- **G3, `system_message`** on a `post_agent` and a `pre_agent` answer: shown in the TUI or not.
+- **G4, hooks in `vibe -p`.** `session_start` and `post_agent` run in `vibe -p --resume`, so `vibe-run` sends with the right `from` and drains later messages in the same run.
+
+### 8.5 vibe 2.20
+
+Not supported any more. The only install is 3.1.2, vibe asks to update itself every day, and two delivery paths would double every test. The installer reads `vibe --version`: below 3, it skips the vibe part and says "Diaulos needs Mistral Vibe 3 or later: run `vibe update`". It also removes our old shim `~/.vibe/tools/agent_bridge.py` when it is ours, which ends vibe's warning at every start. `bridge/vibe_plugin.py` (TUI patch, ACP price cap), `install/vibe-tool.py` and `state/vibe-limits.json` go; the parts of `vibe_plugin.py` that send and list move to `vibe_mcp.py`.
+
+### 8.6 Cost
+
+- **New**: `bridge/vibe_mcp.py` (stdio JSON-RPC, reusing the framing of `mcp_channel.py`), `bridge/vibe_hook.py` (three hooks), the plugin folder `install/vibe-plugin/`.
+- **Changed**: `vibe_sessions.py` (the `unified/` format, names after `/rename`), `vibe_runner.py` (`vibe -p` and its caps instead of ACP, the "already open" case), `vibe_install.py`, the uninstallers, the vibe tests and their fakes (which copy 2.20 today), `run-proofs.sh`.
+- **Removed**: the shim, the TUI patch, the ACP price cap, `vibe-limits.json`.
+- About one day of Programmer work plus a Tester pass, after G1 to G4 (a few cents of devstral-small). The docs (README, INTERNALS, CHANGELOG) change afterwards: idle delivery becomes "after a turn" instead of "at any time", and the line "0.7 to 1.0 s" goes until it is measured again.
+- **Windows**: hooks run in Git Bash, or PowerShell without it (skill 1033). The installer writes the absolute path of the Python it runs with in the hook commands and in `mcp.json`. Untested.
