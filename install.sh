@@ -133,6 +133,8 @@ install -m 644 "$REPO/install/claude-channel.sh" "$BRIDGE_HOME/claude-channel.sh
 MARK="# agent-bridge: claude starts with the MCP channel"
 if [ "$SHELL_WRAPPER" = 1 ]; then
   if ! grep -qF "$MARK" "$HOME/.bashrc" 2>/dev/null; then
+    # uninstall.sh removes ~/.bashrc only if this install created it and it is empty again.
+    [ -e "$HOME/.bashrc" ] || touch "$BRIDGE_HOME/state/bashrc.created"
     printf '\n%s\n[ -f "%s" ] && . "%s"\n' "$MARK" "$BRIDGE_HOME/claude-channel.sh" "$BRIDGE_HOME/claude-channel.sh" >> "$HOME/.bashrc"
   fi
   echo "shell       -> ~/.bashrc sources claude-channel.sh (open a new terminal)"

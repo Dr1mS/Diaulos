@@ -89,6 +89,13 @@ open(path, "w").write("\n".join(out))
 EOF
   echo "removed claude wrapper from ~/.bashrc"
 fi
+if [ -f "$BRIDGE_HOME/state/bashrc.created" ]; then
+  # install.sh created ~/.bashrc: remove it only if nothing else was written there since.
+  if [ -f "$HOME/.bashrc" ] && ! grep -q '[^[:space:]]' "$HOME/.bashrc"; then
+    rm -f "$HOME/.bashrc" && echo "removed ~/.bashrc (created by install, empty)"
+  fi
+  rm -f "$BRIDGE_HOME/state/bashrc.created"
+fi
 rm -f "$BRIDGE_HOME/claude-channel.sh"
 [ -f "$BRIDGE_HOME/bridge.py" ] && python3 "$BRIDGE_HOME/bridge.py" remote stop >/dev/null 2>&1 || true
 rm -rf "$HOME/.claude/skills/agy-bridge" "$HOME/.claude/skills/diaulos-remote" && echo "removed claude skills"

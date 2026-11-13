@@ -241,6 +241,35 @@ class VibeInstallTest(unittest.TestCase):
         self.run_script("uninstall.sh")
         self.assertFalse(os.path.exists(self.vibe_home))
 
+    def test_shell_bashrc_created_by_install_goes_when_empty(self):
+        bashrc = os.path.join(self.home, ".bashrc")
+        self.run_script("install.sh", "--shell")
+        with open(bashrc) as f:
+            self.assertIn("claude-channel.sh", f.read())
+        out = self.run_script("uninstall.sh")
+        self.assertIn("removed ~/.bashrc (created by install, empty)", out)
+        self.assertFalse(os.path.exists(bashrc))
+        self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "state", "bashrc.created")))
+
+    def test_shell_bashrc_created_by_install_stays_when_the_person_wrote_in_it(self):
+        bashrc = os.path.join(self.home, ".bashrc")
+        self.run_script("install.sh", "--shell")
+        with open(bashrc, "a") as f:
+            f.write("alias ll='ls -l'\n")
+        self.run_script("uninstall.sh")
+        with open(bashrc) as f:
+            self.assertEqual(f.read().strip(), "alias ll='ls -l'")
+
+    def test_shell_existing_bashrc_stays_even_if_empty(self):
+        bashrc = os.path.join(self.home, ".bashrc")
+        for content in ("export A=1\n", ""):
+            with open(bashrc, "w") as f:
+                f.write(content)
+            self.run_script("install.sh", "--shell")
+            self.run_script("uninstall.sh")
+            with open(bashrc) as f:
+                self.assertEqual(f.read().strip(), content.strip())
+
     def test_purge_keeps_vibe_sessions(self):
         self.fake_vibe()
         session = os.path.join(self.vibe_home, "logs", "session", "unified", "aaaa-0123456789ab")

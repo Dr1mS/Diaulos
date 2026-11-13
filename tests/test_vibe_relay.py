@@ -166,5 +166,68 @@ class RelayTest(BridgeTest):
         self.assertNotIn(self.tmp, text)
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "process states are read in /proc")
+class StoppedTuiTest(BridgeTest):
+    """T18: a vibe-rs stopped after its terminal closed (orphaned, state T) gets SIGHUP then SIGCONT
+    from the relay; a vibe-rs stopped with Ctrl+Z (its shell still its parent) is left alone."""
+
+    def start_tui(self, new_session):
+        self.marker = os.path.join(self.tmp, "tui-marker")
+        command = [sys.executable, os.path.join(FAKES, "fake_tui.py"), self.marker,
+                   sys.executable, RELAY, "--home", self.bridge_home, "--real", sys.executable, FAKE]
+        env = dict(self.env, FAKE_SERVER_LOG=os.path.join(self.tmp, "server.log"), FAKE_SESSION=SESSION)
+        self.tui = subprocess.Popen(command, stdout=subprocess.PIPE, env=env, start_new_session=new_session)
+        self.addCleanup(self._stop)
+        self.relay_pid = int(self.tui.stdout.readline().split()[1])
+        self.assertTrue(wait_for(lambda: os.path.exists(
+            os.path.join(self.bridge_home, "state", "vibe-relay", "%d.json" % self.relay_pid)), 10))
+
+    def _stop(self):
+        import signal
+        for pid in (self.tui.pid, self.relay_pid):
+            for sig in (signal.SIGCONT, signal.SIGKILL):
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+        self.tui.wait(10)
+        self.tui.stdout.close()
+
+    def state_of(self, pid):
+        try:
+            with open("/proc/%d/stat" % pid, encoding="utf-8") as f:
+                return f.read().rsplit(")", 1)[1].split()[0]
+        except OSError:
+            return None
+
+    def stopped_rows(self):
+        path = os.path.join(self.bridge_home, "state", "vibe-relay.log")
+        try:
+            with open(path, encoding="utf-8") as f:
+                return [r for r in map(json.loads, f) if r.get("dir") == "tui stopped"]
+        except OSError:
+            return []
+
+    def test_an_orphaned_stopped_tui_gets_sighup_and_sigcont_and_the_relay_ends(self):
+        import signal
+        self.start_tui(new_session=True)  # its parent (this test) is outside its session
+        os.kill(self.tui.pid, signal.SIGSTOP)
+        self.assertEqual(self.tui.wait(10), 0)
+        with open(self.marker, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "hup\n")
+        self.assertEqual(len(self.stopped_rows()), 1)
+        self.assertTrue(wait_for(lambda: self.state_of(self.relay_pid) in (None, "Z"), 10), "the relay ends")
+
+    def test_a_tui_stopped_in_its_shell_session_is_left_alone(self):
+        import signal
+        self.start_tui(new_session=False)  # Ctrl+Z: the parent shares its session
+        os.kill(self.tui.pid, signal.SIGSTOP)
+        time.sleep(3)
+        self.assertEqual(self.state_of(self.tui.pid), "T")
+        self.assertFalse(os.path.exists(self.marker))
+        self.assertEqual(self.stopped_rows(), [])
+        self.assertIn(self.state_of(self.relay_pid), ("S", "R"))
+
+
 if __name__ == "__main__":
     unittest.main()

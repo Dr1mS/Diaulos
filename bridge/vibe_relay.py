@@ -31,7 +31,9 @@ The Diaulos thread:
 Signals and ends (§8.9.7): SIGINT is ignored, so Ctrl+C reaches vibe as before. When vibe-rs
 closes its stdin, or vibe-rs is gone (checked every second), the relay closes the real server's
 stdin, waits 5 s, kills it if needed, and exits with its code. When the real server exits, the
-relay exits with its code.
+relay exits with its code. When vibe-rs is stopped (state T) and its parent has left its
+session, which happens when its terminal closes (T18, orphaned_and_stopped), the relay sends it
+SIGHUP then SIGCONT, as the kernel does for an orphaned process group, so vibe-rs ends.
 
 Log (§8.9.8): state/vibe-relay.log, one JSON line per Diaulos event, built only from the keys of
 KEPT; never params, result, error text, message text, account data or path. Rotated at 1 MB.
@@ -60,6 +62,7 @@ POLL_SECONDS = 0.5
 ANSWER_SECONDS = 10.0
 MAX_FAILURES = 3
 CLOSE_SECONDS = 5.0
+RESUME_SECONDS = 2.0  # at most one SIGHUP + SIGCONT to an orphaned, stopped vibe-rs per 2 s
 # Answers that move the TUI to another session (gate R2). Not session/fork: /branch makes a copy and
 # leaves the TUI on its session ("Resume the copy with `vibe --resume <id>`").
 SESSION_METHODS = ("session/start", "session/resume", "session/continue", "session/history/clear")
@@ -70,6 +73,34 @@ HOLD_WHILE_BUSY = False          # R4: send only after turn/completed
 HOLD_WHILE_TUI_ENQUEUES = False  # R7: hold while an enqueue of the TUI has no answer yet
 WAIT_FIRST_ENQUEUE = False       # R5: no delivery before the TUI's first message
 CHECK_LINES = os.environ.get("AGENT_BRIDGE_VIBE_RELAY_CHECK") == "1"  # gates only
+
+
+def proc_stat(pid):
+    """(state, ppid, session id) of a Linux process from /proc/<pid>/stat, or None."""
+    try:
+        with open("/proc/%d/stat" % pid, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        fields = text[text.rindex(")") + 2:].split()
+        return fields[0], int(fields[1]), int(fields[3])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def orphaned_and_stopped(pid):
+    """True when the process is stopped (state T) and its parent is outside its session.
+
+    That is the case the kernel handles when a process group becomes orphaned with a stopped
+    member: it sends SIGHUP then SIGCONT. Closing a terminal can miss it: the shell takes the
+    terminal back, sends SIGHUP to vibe-rs and exits; vibe-rs restores the terminal from what is
+    now a background group, gets SIGTTOU, and stops after the kernel's orphan check (vibe-rs in
+    state T, wchan do_signal_stop, parent the user's systemd, T18). A stop with Ctrl+Z keeps the
+    shell as parent, in the same session: this is False and the relay does nothing.
+    """
+    me = proc_stat(pid)
+    if not me or me[0] != "T":
+        return False
+    parent = proc_stat(me[1])
+    return parent is None or parent[2] != me[2]
 
 
 def short(value):
@@ -157,6 +188,7 @@ class Relay:
         self.n = 0
         self.written = None
         self.closing = False
+        self.resumed_at = 0.0
         self.version = os.environ.get("AGENT_BRIDGE_VIBE_VERSION") or None
 
     # ------------------------------------------------------------ forwarding (never touched by Diaulos errors)
@@ -358,6 +390,19 @@ class Relay:
             reason="busy" if self.busy else "idle")
         self.to_server(line)
 
+    def resume_orphaned_tui(self, now):
+        """Do for vibe-rs what the kernel missed (see orphaned_and_stopped): SIGHUP, then SIGCONT.
+        vibe-rs then ends as with the plain vibe, and the relay follows it (tui_gone)."""
+        if bridge.WINDOWS or now - self.resumed_at < RESUME_SECONDS or not orphaned_and_stopped(self.tui_pid):
+            return
+        self.resumed_at = now
+        log("tui stopped", reason="orphaned after its terminal closed: SIGHUP, SIGCONT")
+        for sig in (signal.SIGHUP, signal.SIGCONT):
+            try:
+                os.kill(self.tui_pid, sig)
+            except OSError:
+                pass
+
     def tui_gone(self):
         if bridge.WINDOWS:
             return not bridge._alive(self.tui_pid)
@@ -383,6 +428,8 @@ class Relay:
                 if now - last < POLL_SECONDS:
                     continue
                 last = now
+                if not self.closing:
+                    self.resume_orphaned_tui(now)
                 if self.tui_gone() and not self.closing:
                     log("tui gone", reason="vibe-rs ended")
                     threading.Thread(target=self.close_server, daemon=True).start()
