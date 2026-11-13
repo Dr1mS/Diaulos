@@ -8,7 +8,8 @@ install.sh --shell runs with HOME=OUT/home, so ~/.bashrc there defines the shell
 Each pass opens a terminal (bash -i in a PTY), types one of the --typed commands (in turn), waits
 for vibe-app-server and 4 s more, then ends the terminal, by turns:
   hup    SIGHUP to bash only, the PTY master kept open;
-  close  the PTY master closed, then SIGHUP to bash (a terminal window closed).
+  close  the PTY master closed (Tui.close: its reader stopped first, so the PTY really hangs up),
+         then SIGHUP to bash if it is still there 10 s later.
 10 s later it reads the state of vibe-rs, of the relay and of vibe-app-server in /proc. A pass is
 "left" if any of them is still there. For a left vibe-rs it gives the state, wchan, parent and
 session of the parent: a stopped vibe-rs (T, do_signal_stop) whose parent is in another session
@@ -102,10 +103,16 @@ def main():
                                                                   open("/proc/%d/cmdline" % pid, "rb").read().decode(
                                                                       "utf-8", "replace"))]
         started = {pid: (stat(pid) or {}).get("start") for pid, _ in procs}
+        t_end = time.time()
         if end == "close":
-            os.close(tui.fd)
-        os.kill(tui.pid, signal.SIGHUP)
-        wait_for(lambda: os.waitpid(tui.pid, os.WNOHANG)[0], 10)
+            tui.close()
+        else:
+            os.kill(tui.pid, signal.SIGHUP)
+        bash_exited = wait_for(lambda: os.waitpid(tui.pid, os.WNOHANG)[0], 10)
+        bash_exit_s = round(time.time() - t_end, 2) if bash_exited else None
+        if not bash_exited:
+            os.kill(tui.pid, signal.SIGHUP)
+            wait_for(lambda: os.waitpid(tui.pid, os.WNOHANG)[0], 10)
         time.sleep(AFTER_SECONDS)
         left = {}
         for pid, comm in procs:
@@ -116,7 +123,7 @@ def main():
                 s = dict(s, parent_same_session=bool(parent and parent["sid"] == s["sid"]))
                 s.pop("start")
                 left[name] = s
-        row = {"pass": i, "typed": typed, "end": end, "tui opened": bool(opened),
+        row = {"pass": i, "typed": typed, "end": end, "tui opened": bool(opened), "bash exit s": bash_exit_s,
                "processes": sorted("relay" if c.startswith("python") else c for _, c in procs),
                "left after %d s" % AFTER_SECONDS: left,
                "relay rows 'tui stopped'": relay_stopped_rows(ab) - stopped_before}

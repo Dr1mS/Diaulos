@@ -23,6 +23,7 @@ import json
 import os
 import pty
 import re
+import select
 import shutil
 import signal
 import struct
@@ -114,10 +115,17 @@ class Tui:
             argv = list(command or [shutil.which("vibe", path=env["PATH"])])
             os.execv(argv[0], argv + args)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
-        threading.Thread(target=self._drain, daemon=True).start()
+        self._stop = threading.Event()
+        self._reader = threading.Thread(target=self._drain, daemon=True)
+        self._reader.start()
 
     def _drain(self):
-        while True:
+        """Reads the terminal, never blocked in os.read: a read blocked on the master keeps the PTY
+        open after os.close(fd) until it returns, which on an idle terminal is never, so the
+        terminal would not hang up (close() stops this reader first)."""
+        while not self._stop.is_set():
+            if not select.select([self.fd], [], [], 0.1)[0]:
+                continue
             try:
                 data = os.read(self.fd, 65536)
             except OSError:
@@ -125,6 +133,13 @@ class Tui:
             if not data:
                 return
             self.chunks.append((time.time(), data))
+
+    def close(self):
+        """Closes the terminal as a terminal window does: the master side of the PTY. The kernel
+        then hangs up the terminal and sends SIGHUP to its session leader."""
+        self._stop.set()
+        self._reader.join(1)
+        os.close(self.fd)
 
     def text(self, since=0.0):
         raw = b"".join(d for t, d in list(self.chunks) if t >= since)
