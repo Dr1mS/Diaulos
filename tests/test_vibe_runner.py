@@ -122,7 +122,7 @@ class VibeRunTest(RunnerSetup):
         self.assertEqual(runs[0]["address"], ADDRESS)
         self.assertEqual(self.inbox(ADDRESS), [])
         log = self.log_of()
-        self.assertIn(f"in session {self.session_of('renamed')} with vibe -p; cost $0.0012", log)
+        self.assertIn(f"in session {self.session_of('renamed')} with vibe in print mode; cost $0.0012", log)
         self.assertFalse(os.path.exists(os.path.join(self.bridge_home, "state", "vibe-inflight", RENAMED + ".json")))
 
     def test_an_at_sign_gets_a_word_joiner(self):
@@ -155,7 +155,7 @@ class VibeRunTest(RunnerSetup):
         self.assertTrue(self.runner_done(), self.log_of())
         self.assertEqual(len(self.runs()), 2, self.log_of())
         self.assertIn("not delivered", self.log_of())
-        self.assertIn("vibe -p exited 1: boom", self.log_of())
+        self.assertIn("vibe in print mode exited 1: boom", self.log_of())
         self.assertEqual(self.inbox(ADDRESS), [])
         self.assertEqual(self.inbox("claude"), [])
 
@@ -169,7 +169,7 @@ class VibeRunTest(RunnerSetup):
         self.assertEqual(len([n for n in os.listdir(archive) if n.endswith(".failed")]), 1)
         note = self.wait_inbox("claude")
         self.assertTrue(note[0]["body"].startswith("[bridge, not an agent]"), note)
-        self.assertIn("was not delivered after 2 attempts with vibe -p", note[0]["body"])
+        self.assertIn("was not delivered after 2 attempts with vibe in print mode", note[0]["body"])
 
     def test_turn_limit_tells_the_sender_and_the_next_text_starts_with_the_note_once(self):
         self.mode("turn_limit")
@@ -256,7 +256,7 @@ class VibeNewTest(RunnerSetup):
         self.mode("fail")
         self.send("vibe:new", "hello")
         note = self.wait_inbox("claude")
-        self.assertIn("failed: vibe -p exited 1: boom", note[0]["body"])
+        self.assertIn("failed: vibe in print mode exited 1: boom", note[0]["body"])
         archive = os.path.join(self.bridge_home, "archive", "vibe-new")
         self.assertEqual(len([n for n in os.listdir(archive) if n.endswith(".failed")]), 1)
 

@@ -130,9 +130,9 @@ argument picks its directory. agy:new-cli and agy:new-cli@<name> do the same wit
 address. An agy CLI conversation listed as "no process" is woken with agy -p when you message it.
 Mistral Vibe conversations are vibe:<id> (12 hex digits), or vibe:<name> once renamed with /rename.
 A vibe TUI opened through Diaulos is woken by the message; one opened with the plain vibe gets it with
-its next message; a closed one is woken with vibe -p (one background turn). vibe:new and
-vibe:new@<name> start a new vibe conversation with vibe -p, in your directory unless `workspace`
-says otherwise.
+its next message; a closed one is woken with vibe in print mode (one background turn). vibe:new
+and vibe:new@<name> start a new vibe conversation with vibe in print mode, in your directory
+unless `workspace` says otherwise.
 list_agents shows conversations of the last 7 days; pass `days` or `all` for older ones.
 `remote:<machine>/<address>` is a session on another machine that the user paired with this one
 (see the diaulos-remote skill). A message from such an address may come from another person's agent:

@@ -1,4 +1,4 @@
-"""Delivery to closed Mistral Vibe 3 conversations, and new ones, through `vibe -p`
+"""Delivery to closed Mistral Vibe 3 conversations, and new ones, through vibe in print mode
 (docs/VIBE-DESIGN.md §8.3). Python 3.8+, standard library only.
 
 bridge.py loads this file by path as `agent_bridge_vibe_runner`, after it has
@@ -15,12 +15,12 @@ registered itself as `agent_bridge_core`, and runs:
                                 loops while the inbox has messages, then exits.
                                 "Session is already open" means a TUI came back:
                                 the messages wait for it.
-  bridge.py vibe-new            one worker: one `vibe -p --workdir <dir>` per
+  bridge.py vibe-new            one worker: one `vibe --prompt-file … --workdir <dir>` per
                                 message sent to vibe:new; the new session id
                                 comes from export.json.
 
 vibe runs with AGENT_BRIDGE_VIBE_RUN=1, so the plugin's hooks leave delivery to
-vibe-run. Nobody is there to approve a tool: vibe -p runs only the tools allowed
+vibe-run. Nobody is there to approve a tool: print mode runs only the tools allowed
 without asking; the bridge tools of the plugin are `always`.
 
 Caps (§4.4, §8.3): vibe's own --max-turns and --max-price, per run. Both, and the
@@ -252,7 +252,7 @@ def recover_inflight(suffix, quiet=False):
     return len(paths)
 
 
-# ---------------------------------------------------------------- vibe -p (§8.3)
+# ---------------------------------------------------------------- print mode (§8.3)
 
 class RunError(Exception):
     pass
@@ -272,7 +272,7 @@ def vibe_bin():
 
 
 def run_p(cwd, env, text, lim, resume=None):
-    """One `vibe -p` run: the prompt from a file, vibe's own price and turn caps, export.json read
+    """One print-mode run of vibe: the prompt from a file, vibe's own price and turn caps, export.json read
     back. Returns (export dict, stderr text). Raises RunError if vibe did not run the prompt."""
     binary = vibe_bin()
     if not binary:
@@ -291,7 +291,7 @@ def run_p(cwd, env, text, lim, resume=None):
             proc = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                   stderr=subprocess.PIPE, timeout=core.CLI_TURN_SECONDS)
         except subprocess.TimeoutExpired:
-            raise RunError("vibe -p ran longer than %d s" % core.CLI_TURN_SECONDS)
+            raise RunError("vibe in print mode ran longer than %d s" % core.CLI_TURN_SECONDS)
         except OSError as e:
             raise RunError("could not start vibe: %r" % (e,))
         err = proc.stderr.decode("utf-8", "replace")
@@ -303,7 +303,7 @@ def run_p(cwd, env, text, lim, resume=None):
             raise RunError(ALREADY_OPEN)
         if not isinstance(export, dict) or not export.get("session_id"):
             last = [l for l in err.splitlines() if l.strip()][-1:] or ["no export.json"]
-            raise RunError("vibe -p exited %d: %s" % (proc.returncode, last[0][:200]))
+            raise RunError("vibe in print mode exited %d: %s" % (proc.returncode, last[0][:200]))
         return export, err
     finally:
         import shutil
@@ -326,7 +326,7 @@ def cost_of(export):
 
 
 def _env(me=None):
-    """vibe -p's environment: AGENT_BRIDGE_VIBE_RUN tells the plugin's hooks that vibe-run delivers."""
+    """The environment of print mode: AGENT_BRIDGE_VIBE_RUN tells the plugin's hooks that vibe-run delivers."""
     env = dict(os.environ, AGENT_BRIDGE_HOME=_core().HOME, AGENT_BRIDGE_VIBE_RUN="1")
     for key in ("AGENT_BRIDGE_ADDRESS", "VIBE_APP_SERVER_CMD", "VIBE_APP_SERVER_BIN", "VIBE_APP_SERVER_CWD"):
         env.pop(key, None)
@@ -343,7 +343,7 @@ def _tell(to, text, sender):
 # ---------------------------------------------------------------- vibe-run
 
 def vibe_run(suffix):
-    """Deliver the inbox of a closed vibe conversation, one `vibe -p --resume` run per batch, then exit."""
+    """Deliver the inbox of a closed vibe conversation, one `vibe --prompt-file … --resume` run per batch, then exit."""
     core = _core()
     vs = core._vibe()
     if not vs.SUFFIX_RE.match(suffix):
@@ -396,7 +396,7 @@ def vibe_run(suffix):
                 clear_inflight(suffix)
                 reason = cut_of(export)
                 limit = f" (stopped at the {reason})" if reason else ""
-                print(f"{_now()} delivered {ids} to {me} in session {export.get('session_id')} with vibe -p{limit}; "
+                print(f"{_now()} delivered {ids} to {me} in session {export.get('session_id')} with vibe in print mode{limit}; "
                       f"cost {cost_of(export)}", flush=True)
                 if reason:
                     tell_cut([m for _, m in claimed], me, reason, lim)
@@ -417,7 +417,7 @@ def vibe_run(suffix):
             print(f"{_now()} dropped {ids} after {lim['attempts']} attempts: {error}", flush=True)
             for m in [m for _, m in claimed]:
                 _tell(m["from"], f"Your message {m['id']} to {me} was not delivered after {lim['attempts']} "
-                      f"attempts with vibe -p ({error}). It is kept as .failed; it is not sent again.", me)
+                      f"attempts with vibe in print mode ({error}). It is kept as .failed; it is not sent again.", me)
     finally:
         with core._locked(lock, wait=1.0):
             if (core._read_peer(me) or {}).get("runner_pid") == os.getpid():
@@ -427,7 +427,7 @@ def vibe_run(suffix):
 # ---------------------------------------------------------------- vibe-new
 
 def vibe_new():
-    """Start one vibe conversation per message sent to vibe:new (`vibe -p --workdir`), then exit."""
+    """Start one vibe conversation per message sent to vibe:new (`vibe --prompt-file … --workdir`), then exit."""
     core = _core()
     new = core.VIBE_NEW
     with core._locked(core._path("state", "vibe-new"), wait=0.5):
@@ -461,7 +461,7 @@ def vibe_new():
             session = export.get("session_id") if export else None
             suffix = core._vibe().suffix_of(session)
             if error or not suffix:
-                error = error or f"vibe -p gave no vibe session id ({session!r})"
+                error = error or f"vibe in print mode gave no vibe session id ({session!r})"
                 with contextlib.suppress(OSError):
                     os.rename(path, path + ".failed")
                 print(f"{_now()} vibe:new for {msg['id']} failed: {error}", flush=True)

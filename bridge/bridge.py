@@ -23,7 +23,7 @@ Addresses:
 `agy:new@<title>` also names it;
 `agy:new-cli` and `agy:new-cli@<name>` start a new agy CLI conversation (agy -p);
 `vibe:<name>` picks a vibe conversation by its /rename title; `vibe:new` and
-`vibe:new@<name>` start a new vibe conversation (vibe -p);
+`vibe:new@<name>` start a new vibe conversation (vibe in print mode);
 `<kind>:<prefix>` or `<kind>@<workspace-substring>` picks one among several.
 agy sessions can message each other the same way.
 
@@ -40,7 +40,7 @@ Usage:
   bridge.py agy-relay [--probe TEXT | --inspect]   relay loop / one-off tests (agy shell only)
   bridge.py cli-run <conversationId>               deliver to a sleeping agy CLI conversation (internal)
   bridge.py cli-new                                start the conversations asked from agy:new-cli (internal)
-  bridge.py vibe-run <suffix>                      deliver to a closed vibe conversation with vibe -p (internal)
+  bridge.py vibe-run <suffix>                      deliver to a closed vibe conversation with vibe in print mode (internal)
   bridge.py vibe-new                               start the conversations asked from vibe:new (internal)
   bridge.py remote <command>                       pair machines and run the gateway (see remote.py)
 """
@@ -73,7 +73,7 @@ AUTO_SCAN_SECONDS = 10  # auto-relay: how often listing agy peers looks for lang
 RECENT_DAYS = 7  # Desktop conversations modified this recently are reachable even when not loaded
 NEW = "agy:new"  # inbox read by Desktop relays: each message there starts a new conversation
 NEW_CLI = "agy:new-cli"  # each message there starts a new agy CLI conversation with agy -p
-VIBE_NEW = "vibe:new"  # each message there starts a new vibe conversation with vibe -p
+VIBE_NEW = "vibe:new"  # each message there starts a new vibe conversation with vibe in print mode
 CLI_DIR = AGY_DIRS[0]  # agy CLI data: its index of conversations
 CLI_TURN_SECONDS = 1800  # --print-timeout of one headless agy CLI turn
 CLI_ARG_MAX = 100_000  # a message goes to agy -p as one argument: stay under Linux's 128 KiB per argument
@@ -384,7 +384,7 @@ def _agy_title(conversation):
 # known from two state files (vibe_sessions.py): state/vibe-relay/<pid>.json, written by the
 # relay of a TUI opened with vibe-diaulos (it wakes the conversation), and
 # state/vibe-current/<app-server pid>.json, written by the plugin's session_start hook in any
-# TUI or `vibe -p` (`run`). The peer file peers/vibe-<suffix>.json keeps runner_pid
+# TUI or print-mode run (`run`). The peer file peers/vibe-<suffix>.json keeps runner_pid
 # (vibe-run) and the aliases of vibe:new@<name>.
 
 def _load_sibling(module_name, file_name):
@@ -517,7 +517,7 @@ def _describe_vibe(peer):
     if how is None and peer["runner_alive"]:
         how = "background turn running (vibe-run)"
     elif how is None and _vibe_bin():
-        how = "closed: wakes with vibe -p"
+        how = "closed: wakes in print mode (vibe --prompt-file)"
     elif how is None:
         how = "closed: waits until reopened (no vibe command)"
     label = peer.get("name") or re.sub(r'[\s"]+', " ", peer.get("title") or "").strip()[:60]

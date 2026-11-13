@@ -21,7 +21,7 @@ pre_agent, three cases:
   - a message the person typed, with no relay (a TUI opened with the real `vibe`): the waiting
     messages of the conversation are claimed and added after the person's message
     (additional_context), with one line "message(s) from <senders>" on screen.
-  In a `vibe -p` run of vibe-run (AGENT_BRIDGE_VIBE_RUN set), nothing: vibe-run delivers.
+  In a print-mode run of vibe-run (AGENT_BRIDGE_VIBE_RUN set), nothing: vibe-run delivers.
 
 A hook never breaks vibe: any error gives an empty answer (vibe goes on) and one line in
 state/vibe-hook.log, which never holds a message text.

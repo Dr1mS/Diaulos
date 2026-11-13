@@ -172,7 +172,7 @@ class BridgeVibeTest(VibeSetup):
             else:
                 self.assertNotIn("vibe:" + SUFFIX[case], listed, case)
         self.assertIn('"review_bot"', listed)
-        self.assertIn("closed: wakes with vibe -p", listed)
+        self.assertIn("closed: wakes in print mode (vibe --prompt-file)", listed)
         self.assertIn("vibe:" + SUFFIX["old"], self.listing("--all"))
 
     def test_list_without_vibe(self):
@@ -193,7 +193,7 @@ class BridgeVibeTest(VibeSetup):
         dead.wait()
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"session": self.ids["renamed"][0], "app_pid": dead.pid, "run": False}, f)
-        self.assertIn("closed: wakes with vibe -p", line(), "a dead TUI counts as closed")
+        self.assertIn("closed: wakes in print mode (vibe --prompt-file)", line(), "a dead TUI counts as closed")
         self.assertFalse(os.path.exists(path), "the file of a dead TUI is removed")
 
     def test_a_vibe_p_run_is_not_a_tui(self):
@@ -201,7 +201,7 @@ class BridgeVibeTest(VibeSetup):
         os.makedirs(os.path.dirname(path))
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"session": self.ids["renamed"][0], "app_pid": os.getpid(), "run": True}, f)
-        self.assertIn("closed: wakes with vibe -p", self.listing())
+        self.assertIn("closed: wakes in print mode (vibe --prompt-file)", self.listing())
 
     def test_remote_addresses_accept_vibe(self):
         bridge = self.load_bridge()
