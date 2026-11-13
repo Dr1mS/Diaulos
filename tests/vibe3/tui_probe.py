@@ -103,15 +103,16 @@ class Screen:
 
 
 class Tui:
-    def __init__(self, cwd, env, args):
+    def __init__(self, cwd, env, args, command=None):
+        """`command`: argv put before `args` instead of the `vibe` found on PATH (vibe-diaulos)."""
         self.chunks = []  # (time, bytes)
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
             os.environ.clear()
             os.environ.update(env, TERM="xterm-256color")
-            vibe = shutil.which("vibe", path=env["PATH"])
-            os.execv(vibe, [vibe] + args)
+            argv = list(command or [shutil.which("vibe", path=env["PATH"])])
+            os.execv(argv[0], argv + args)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
         threading.Thread(target=self._drain, daemon=True).start()
 

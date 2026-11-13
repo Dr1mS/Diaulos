@@ -20,3 +20,17 @@ function claude {
     }
     & $real --dangerously-load-development-channels server:agent-bridge @args
 }
+
+# Makes a plain `vibe` (Mistral Vibe 3) open its TUI behind the Diaulos relay (docs/VIBE-DESIGN.md
+# §8.9.3); vibe-diaulos sends the uses that never open the TUI to the real vibe unchanged. Bypass
+# with `vibe.exe ...`, or set $env:AGENT_BRIDGE_VIBE_RELAY = '0'. Not tried on Windows (§8.9.9).
+$AgentBridgeVibeDiaulos = Join-Path $PSScriptRoot 'vibe_diaulos.py'
+if (Test-Path $AgentBridgeVibeDiaulos) {
+    function vibe {
+        $real = Get-Command vibe -CommandType ExternalScript, Application -ErrorAction Stop | Select-Object -First 1
+        if ($env:AGENT_BRIDGE_VIBE_RELAY -eq '0') { & $real @args; return }
+        $python = Get-Command python3, python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $python) { & $real @args; return }
+        & $python $AgentBridgeVibeDiaulos @args
+    }
+}
