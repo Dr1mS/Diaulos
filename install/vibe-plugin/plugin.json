@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "diaulos",
+  "version": "1.0.0",
+  "description": "Diaulos: message Claude Code, agy and other vibe conversations, and receive their messages.",
+  "license": "MIT",
+  "extensions": {
+    "ai.mistral.vibe": {
+      "schemaVersion": 1,
+      "displayName": "Diaulos",
+      "toolNamespace": "diaulos"
+    }
+  }
+}

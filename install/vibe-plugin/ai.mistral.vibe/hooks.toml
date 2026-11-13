@@ -1,0 +1,15 @@
+# Hooks of the Diaulos plugin (docs/VIBE-DESIGN.md §8.2, §8.9.5), written by the Diaulos installer.
+# session_start: tells this conversation its address. pre_agent: in a TUI opened without the
+# relay, adds waiting messages to the person's message.
+
+[[hooks]]
+name = "session-start"
+type = "session_start"
+command = "@HOOK@ session_start"
+timeout = 20.0
+
+[[hooks]]
+name = "pre-agent"
+type = "pre_agent"
+command = "@HOOK@ pre_agent"
+timeout = 20.0

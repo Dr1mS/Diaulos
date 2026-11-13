@@ -1,0 +1,3 @@
+#!/bin/sh
+# Launcher of the Diaulos MCP server, written by the Diaulos installer (docs/VIBE-DESIGN.md §8.7).
+AGENT_BRIDGE_HOME=@BRIDGE_HOME@ exec @PYTHON@ @BRIDGE_HOME@/vibe_mcp.py "$@"

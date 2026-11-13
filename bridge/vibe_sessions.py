@@ -195,3 +195,152 @@ def conversations(days=7, directory=None, now=None):
 def conversation(suffix, directory=None):
     """The conversation of `suffix`, whatever its age, or None."""
     return conversations(None, directory).get(suffix) if SUFFIX_RE.match(str(suffix)) else None
+
+
+# ---------------------------------------------------------------- live processes (§8.2 Identity, §8.9.4)
+# bridge.py loads this file after registering itself as agent_bridge_core: paths and
+# process checks come from there.
+#
+# state/vibe-current/<app-server pid>.json  written by the session_start hook: the main
+#     session that vibe-app-server serves now (session, address, cwd, source, run, at).
+#     vibe_mcp.py and the pre_agent hook read the file of their own vibe-app-server.
+# state/vibe-relay/<relay pid>.json  written by the relay (vibe_relay.py): session, the
+#     vibe-rs pid (tui_pid), the real server pid, vibe version, wake "relay" or "off".
+
+APP_SERVER = "vibe-app-server"
+
+
+def _core():
+    import sys
+    return sys.modules["agent_bridge_core"]
+
+
+def _cmdline_name(pid):
+    """Linux: the program name of `pid` as its command line shows it (vibe-app-server sets
+    its process title), else its comm. None if unreadable."""
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            first = f.read().split(b"\0", 1)[0].decode("utf-8", "replace").strip()
+        if first:
+            return os.path.basename(first.split(" ", 1)[0])
+    except OSError:
+        pass
+    try:
+        with open("/proc/%d/comm" % pid, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _parent_of(pid):
+    try:
+        with open("/proc/%d/stat" % pid, encoding="utf-8") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def app_server_pid(start=None):
+    """Pid of the nearest vibe-app-server above this process (the MCP server is its child,
+    a hook its grandchild through /bin/sh), or None. Windows: the process table of bridge.py."""
+    core = _core()
+    if core.WINDOWS:
+        return core._ancestor(APP_SERVER, "vibe-app-server.exe")
+    pid, seen = start or os.getppid(), set()
+    while pid and pid > 1 and pid not in seen:
+        seen.add(pid)
+        name = _cmdline_name(pid)
+        if name == APP_SERVER or (name or "").startswith(APP_SERVER[:15]):
+            return pid
+        pid = _parent_of(pid)
+    return None
+
+
+def _write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def current_path(app_pid):
+    return _core()._path("state", "vibe-current", "%d.json" % int(app_pid))
+
+
+def write_current(app_pid, session_id, cwd=None, source=None, run=False):
+    data = {"session": session_id, "address": address_of(session_id), "cwd": cwd, "source": source,
+            "run": bool(run), "app_pid": int(app_pid), "at": time.time()}
+    _write_json(current_path(app_pid), data)
+    return data
+
+
+def read_current(app_pid):
+    data = _read_json(current_path(app_pid)) if app_pid else None
+    return data if data and suffix_of(data.get("session")) else None
+
+
+def live_currents():
+    """{suffix: record} of vibe-current files whose vibe-app-server is alive; dead ones are removed."""
+    core = _core()
+    folder = core._path("state", "vibe-current")
+    found = {}
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return found
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        data = _read_json(os.path.join(folder, name))
+        if not data or not suffix_of(data.get("session")):
+            continue
+        if not core._alive(data.get("app_pid")):
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
+            continue
+        found[suffix_of(data["session"])] = data
+    return found
+
+
+def relay_path(relay_pid):
+    return _core()._path("state", "vibe-relay", "%d.json" % int(relay_pid))
+
+
+def live_relays():
+    """{suffix: record} of relay state files whose relay and vibe-rs are both alive; dead ones
+    are removed. A relay whose session is not known yet is left out."""
+    core = _core()
+    folder = core._path("state", "vibe-relay")
+    found = {}
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return found
+    for name in names:
+        if not (name.endswith(".json") and name[:-5].isdigit()):
+            continue
+        data = _read_json(os.path.join(folder, name))
+        if not data:
+            continue
+        if not (core._alive(data.get("relay_pid")) and core._alive(data.get("tui_pid"))):
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
+            continue
+        suffix = suffix_of(data.get("session"))
+        if suffix:
+            found[suffix] = data
+    return found
