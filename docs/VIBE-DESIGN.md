@@ -220,7 +220,7 @@ Diaulos ships a native vibe plugin, `~/.vibe/plugins/diaulos/`, copied by the in
 | Part | File | Role |
 |---|---|---|
 | manifest | `plugin.json`, with the `ai.mistral.vibe` extension (`schemaVersion` 1, `toolNamespace` `diaulos`) | names the plugin; without this extension vibe loads none of its hooks (skill 1486) |
-| MCP server | `mcp.json`, starting `~/.agent-bridge/vibe_mcp.py` | the tools `bridge_send` and `bridge_list_agents` (server alias `bridge`, remote names `send` and `list_agents`) |
+| MCP server | `mcp.json`, starting `~/.agent-bridge/vibe_mcp.py` | the tools `send` and `list_agents` of the server `diaulos` (§8.7: the key was `bridge` before the gates) |
 | `session_start` hook | `ai.mistral.vibe/hooks.toml`, running `~/.agent-bridge/vibe_hook.py` | registers the session as a peer, and tells the model its address |
 | `post_agent` hook | same file | delivers waiting messages when a turn ends, and listens for new ones (§8.3) |
 | `pre_agent` hook | same file | adds messages that waited to the person's next message |
@@ -230,14 +230,14 @@ Why a plugin, not lines in the person's `config.toml` and `hooks.toml`: one fold
 
 Why MCP for the tools, not a skill alone: with a skill, each send is a `bash` call that asks for approval, and the message text must be quoted for the shell. An MCP tool takes `to` and `text` as JSON, can run with `permission = "always"` (probe Q2: the key is `[tools.<alias>_<remote name>]`), and returns the same errors as today.
 
-**Identity.** One MCP process serves one `vibe-app-server`, not one session, and gets no session id (probe Q1). The `session_start` hook gets it (`session_id`, `transcript_path`, `cwd`, `source`). It writes `state/vibe-current/<app-server pid>.json` with the current main session. `vibe_mcp.py` reads the file of its parent pid at each call, so `/resume`, `/clear` and a fork are followed. The address stays `vibe:<last 12 hex of the uuid>`, and `vibe:<name>` after `/rename`. A subagent sends as its main session, since `session_start` never runs for subagents.
+**Identity.** One MCP process serves one `vibe-app-server`, not one session, and gets no session id (probe Q1). The `session_start` hook gets it (`session_id`, `transcript_path`, `cwd`, `source`). It writes `state/vibe-current/<app-server pid>.json` with the current main session. `vibe_mcp.py` reads the file of its parent pid at each call, so `/resume`, `/clear` and a fork are followed. The address is `vibe:<last 12 hex of the uuid>`, and `vibe:<name>` after `/rename`. One uuid is one conversation and one address: unlike 2.20, `/clear` gives a new uuid, so a new address (T10d, `20-programmer.md`: `session_start` gets `source=clear` and the new id). The old address is then a closed conversation, which `vibe-run` serves in the background; a `/rename` name stays with its uuid, and the new conversation has none until renamed. `/compact` keeps the uuid and the address. Before its first message, a new conversation has no folder in `unified/` yet: only `state/vibe-current/` knows its address, and a message sent to it waits for the `pre_agent` hook of that first message. A subagent sends as its main session, since `session_start` never runs for subagents.
 
 ### 8.3 Delivery
 
 | vibe state | 2.20 design | 3.x design |
 |---|---|---|
 | Working | after the turn, by the plugin | after the turn: the `post_agent` hook claims the waiting messages and answers `{"decision": "deny", "reason": <bridge header + messages>}`, which vibe sends to the model as a retry message (probe Q3) |
-| Idle after a turn | woken in about 1 s | the same `post_agent` hook keeps listening after the turn ends (a long poll on the inbox, like agy's listening `Stop` hook), and answers as above when a message arrives. The TUI stays usable while it waits (probe Q4: keys echoed 0.21 s later). Gate G1 |
+| Idle after a turn | woken in about 1 s | the same `post_agent` hook keeps listening after the turn ends (a long poll on the inbox, like agy's listening `Stop` hook), and answers as above when a message arrives. The TUI stays usable while it waits (probe Q4: keys echoed 0.21 s later). Gate G1. **Dropped after G1 failed: see §8.7** |
 | Idle before the first message | woken | not woken: no hook runs before the first message. The message waits for the `pre_agent` hook (the person's first message) or for the TUI to close |
 | Closed | `vibe-run` with `vibe-acp` and the plugin's price cap | `vibe-run` with `vibe -p --resume <id> --prompt-file <message> --max-price 0.50 --max-turns <n> --output json`. "Session is already open" is not a failure: the TUI came back, and the message waits for it |
 | New (`vibe:new`) | `vibe-acp` | `vibe -p --workdir <dir> --prompt-file … --max-price 0.50 --output json`; the new id comes from the JSON output |
@@ -269,4 +269,60 @@ Not supported any more. The only install is 3.1.2, vibe asks to update itself ev
 - **Changed**: `vibe_sessions.py` (the `unified/` format, names after `/rename`), `vibe_runner.py` (`vibe -p` and its caps instead of ACP, the "already open" case), `vibe_install.py`, the uninstallers, the vibe tests and their fakes (which copy 2.20 today), `run-proofs.sh`.
 - **Removed**: the shim, the TUI patch, the ACP price cap, `vibe-limits.json`.
 - About one day of Programmer work plus a Tester pass, after G1 to G4 (a few cents of devstral-small). The docs (README, INTERNALS, CHANGELOG) change afterwards: idle delivery becomes "after a turn" instead of "at any time", and the line "0.7 to 1.0 s" goes until it is measured again.
-- **Windows**: hooks run in Git Bash, or PowerShell without it (skill 1033). The installer writes the absolute path of the Python it runs with in the hook commands and in `mcp.json`. Untested.
+- **Windows**: hooks run in Git Bash, or PowerShell without it (skill 1033). The installer writes the absolute path of the Python it runs with in the hook commands, and in the launcher that `mcp.json` starts (§8.7: `mcp.json` itself refuses an absolute path). Untested.
+
+### 8.7 After the gates (T10d)
+
+The Programmer ran G1 to G4 on 2026-11-13 (`tests/vibe3/gates.py`, `gates_tui.py`, `gate_hook.py`; handoff `T10-vibe3/14-programmer.md` and its raw logs). Results, and what they change:
+
+| Gate | Result | Change to §8.2-§8.6 |
+|---|---|---|
+| G1, listening `post_agent` | **Fail.** While the hook waits, the TUI shows "Generating… (Esc to interrupt · Enter to steer…)" The model's answer stays on screen, but vibe writes it to the journal only when the hook ends. A message sent with Enter is "Queued" and waits for the hook (its `pre_agent` starts 23.21 s after Enter, the hook ended at 22.98 s). Esc ends the turn and kills the hook without SIGTERM. | The `post_agent` hook only delivers what already waits, then exits at once. It never listens. |
+| G2, permission | The key is `[tools.<server key in mcp.json>_<remote tool name>]`. A plugin cannot set it (`permission` exists only for a plugin's subagents, src `core/plugins/_native.py`). | The installer writes one marked block into `config.toml` (below). |
+| G3, `system_message` | Shown: `⚠ [<plugin name>:<hook name>] <text>` for `pre_agent` and for a `post_agent` deny, `✓ …` for `session_start`. It replaces "Requested turn revision". The `reason` text stays hidden. | Each delivery shows `⚠ [diaulos:…] message from <sender>` in the TUI. |
+| G4, hooks in `vibe -p` | Yes: `session_start` (`startup` or `resume`, same `session_id`), `pre_agent`, `post_agent`; a `post_agent` deny drains a later message in the same run. | None. |
+
+**Decisions.**
+
+1. **The MCP command is a launcher inside the plugin.** A plugin's stdio command must be a bare executable found on `PATH` or a path starting with `./`; an absolute path is refused ("stdio command must be a bare executable or start with './'"). `mcp.json` runs `./vibe-mcp` (`./vibe-mcp.cmd` on Windows; not tried yet, gate G7 in §8.8), a two-line launcher that the installer writes with the absolute path of its own Python and of `~/.agent-bridge/vibe_mcp.py`. Not `python3` from `PATH`: it may be another Python than the one Diaulos was installed with, and on Windows it may be the Store alias. The launcher only reads; vibe runs the plugin from a read-only copy (`<save_dir>/plugins/packages/<hash>/`), so nothing may be written next to it. Hook commands are shell lines and keep absolute paths.
+2. **Exact manifests.** `plugin.json` has `"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"`, `mcp.json` has `"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"`, and the server has `"type": "stdio"`. Without them vibe drops the plugin ("No supported plugin manifest was found") or the server.
+3. **Server key `diaulos`, tools `send` and `list_agents`.** The permission key depends on the server key, not on the plugin: a server with the same name in the person's config would share its permission keys, and vibe then disables the plugin's server with a warning (`MCP_SERVER_SHADOWED`, src `core/plugins/_native.py:1790-1829`). With `diaulos`, vibe shows the tool as `mcp_diaulos.send`, which also matches the tool names of Claude Code's channel. The `config.toml` block is:
+
+   ```toml
+   # >>> diaulos (written by the Diaulos installer; removed by the uninstaller) >>>
+   [tools.diaulos_send]
+   permission = "always"
+
+   [tools.diaulos_list_agents]
+   permission = "always"
+   # <<< diaulos <<<
+   ```
+
+   The installer backs up `config.toml` first. Two cases make it stop the vibe part, write neither the plugin nor the block, and say why:
+   - `config.toml` already declares an MCP server named `diaulos` (compared as vibe normalizes names). vibe would disable the plugin's server, and `permission = "always"` would go to that other server. Message: "Mistral Vibe already has an MCP server named diaulos: rename or remove it, then run the installer again".
+   - `[tools.diaulos_send]` or `[tools.diaulos_list_agents]` already exists without our markers (TOML refuses a table defined twice).
+
+   A project `.vibe/config.toml` can also declare a `diaulos` server; the installer cannot see it. vibe then shows its own warning, and the README says so in Troubleshooting. The uninstaller removes only the marked block. The README and the skill name the tools `send` and `list_agents` of the `diaulos` server; the words `bridge_send` and `bridge_list_agents` go.
+4. **A delivery after a busy turn costs one model call and drops the model's last answer from its memory.** A `post_agent` deny is a "turn revision": vibe marks the answer it just wrote `discarded` (`"cause": "retry"`) and asks again with the reason. The person still sees that answer on screen; the model no longer has it in its context and writes a new one that also handles the message. Tool calls made during the turn stay. The `reason` therefore starts with one line saying so: "Your last answer is still on the person's screen. New Diaulos messages arrived:", then the messages. Not chosen instead: delivering busy-turn messages only with the person's next message (`pre_agent`), which keeps the answer but makes them wait for a person.
+5. **Price cap.** `export.json` counts only the last of the calls when a retry discards one (G4: two calls of 8,498 and 8,520 input tokens, `usage.input_tokens` 8,520). Whether `--max-price` counts the discarded calls is not checked. Bound: at most 3 discarded calls per turn (`_MAX_POST_AGENT_RETRIES`), so a background run can end above `--max-price 0.50` by at most 3 calls per turn, `--max-turns` bounding the turns. In `-p` sessions the journal's `tokenUsage` is cumulative over the session (T10c, `10-programmer.md`: 8,581, then 17,209, then 25,957 input tokens), so `vibe-run` logs the cost of its run as the last `tokenUsage` of the run minus the last one before it, priced with the model's prices from the config. Whether that cumulative value includes a discarded call is not known: G6 checks it with `--max-price`. Until then the log line gives the cost and, next to it, the number of `discarded` answers with `"cause": "retry"` in the run ("cost 0.0021 $, 1 discarded call not counted" when G6 shows they are not in `tokenUsage`).
+
+### 8.8 Receiving while the TUI is idle: Adrien's choice
+
+**Options A and B below were refused by Adrien on 13 Nov.; a native wake is being searched (T12).** This section will be rewritten after T12.
+
+After G1, an open TUI that is idle cannot be woken by a hook. Two options remain. Both keep the rest as in §8.3: after a busy turn (decision 4 above), with the person's next message (`pre_agent`, with a `⚠ [diaulos:…] message from <sender>` line), and in the background once the TUI is closed (`vibe-run`, within about 30 s when a Claude Code session with the channel is open). While a TUI holds the session, `vibe-run` cannot open it ("Session is already open"), so in both options a message to an idle TUI that stays open waits.
+
+| | **A. No wake while idle** (proposed) | **B. A repeated prompt (`cron`)** |
+|---|---|---|
+| How | Nothing more. `list` says `TUI: delivers at its next turn`, and the sender's `send` result says the conversation is idle in a TUI and gets the message at its next turn or once closed. | The model schedules a prompt every 30 s with vibe's `cron` tool (only the model can: `/loop` sends the request to the model). Each tick goes through `pre_agent`: inbox empty, the hook answers `deny` and no model call is made (T10b: no `tokenUsage`); inbox not empty, the hook replaces the tick's text with the messages (`hook_specific_output.prompt`) and the turn runs. |
+| Delay, idle TUI | Until the person sends a message or closes vibe: minutes or hours. vibe 2.20: 0.7 to 1.0 s. | 30 s at most for the tick, plus the turn. |
+| Model cost | None more. | No call on an empty tick. One call per session to create the schedule. |
+| Screen | One `⚠` line per delivery. | Per tick, probably the tick's prompt row (`⏵ …`, skill 226) and the `pre_agent` line: up to 120 ticks an hour, so up to about 240 lines an hour of an idle TUI. G3 changes the colour (a warning with our own text instead of "Blocked the message", error level) but not the count. |
+| Risks | None new. | The model must create the schedule (devstral-small often misreads instructions, T10b). The schedule stays in the session (`scheduled-loops.json`) after Diaulos is uninstalled. Maximum 50 schedules per session. |
+| Work | Included in T11. | About half a day more, after a gate G5. |
+
+**Proposal: A now, B only if G5 passes.** A keeps the TUI clean and costs nothing, but drops the idle criterion for an open TUI: the person gets the message when they next type or close vibe. B gets the criterion back within about 30 s, at the price of screen noise that only a real run can measure.
+
+- **G5** (no longer relevant: B was refused) (only if Adrien wants B): in the real TUI, one `cron` schedule of 30 s and a `pre_agent` that denies an empty tick with an empty `system_message`. Count the rows each empty tick adds to the screen, over 5 ticks; check that a non-empty tick runs the messages as its prompt; check that the person's own message typed during a tick is not lost. B is kept only if an empty tick adds no row.
+- **G6** (in T11 in any case): one `vibe -p` run whose `post_agent` discards an answer, with `--max-price` set just above one call: does `--max-price` count the discarded call, and does the cumulative `tokenUsage` of the journal include it?
+- **G7** (first step of T11): the launcher. `./` is relative to the plugin root, and vibe runs the plugin from a copy (`<save_dir>/plugins/packages/<hash>/`). Check that `./vibe-mcp` starts from that copy, that the copy keeps the executable bit, and that the server answers `tools/list`. If the bit is lost, `mcp.json` runs `"command": "sh", "args": ["./vibe-mcp"]` instead (`sh` is a bare executable on `PATH`). On Windows, `./vibe-mcp.cmd` is not tried at all.
