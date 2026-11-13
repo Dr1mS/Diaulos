@@ -12,7 +12,7 @@ for vibe-app-server and 4 s more, then ends the terminal, by turns:
 10 s later it reads the state of vibe-rs, of the relay and of vibe-app-server in /proc. A pass is
 "left" if any of them is still there. For a left vibe-rs it gives the state, wchan, parent and
 session of the parent: a stopped vibe-rs (T, do_signal_stop) whose parent is in another session
-is the orphaned stop of T18. Whatever is left is then killed (throwaway processes only).
+is the orphaned stop of T18. Whatever is left is then killed (throwaway processes only, each checked by its start time first).
 
 Output: one JSON line per pass, then the counts per typed command; OUT/terminal-close.json.
 The rows "tui stopped" of the relay log (OUT/ab/state/vibe-relay.log) are counted too.
@@ -56,7 +56,8 @@ def stat(pid):
         fields = text[text.rindex(")") + 2:].split()
         with open("/proc/%d/wchan" % pid, encoding="utf-8") as f:
             wchan = f.read()
-        return {"state": fields[0], "ppid": int(fields[1]), "sid": int(fields[3]), "wchan": wchan}
+        return {"state": fields[0], "ppid": int(fields[1]), "sid": int(fields[3]), "wchan": wchan,
+                "start": int(fields[19])}
     except (OSError, ValueError, IndexError):
         return None
 
@@ -100,6 +101,7 @@ def main():
                  if comm in ("vibe-rs", "vibe-app-server") or (comm.startswith("python") and "vibe_relay.py" in
                                                                   open("/proc/%d/cmdline" % pid, "rb").read().decode(
                                                                       "utf-8", "replace"))]
+        started = {pid: (stat(pid) or {}).get("start") for pid, _ in procs}
         if end == "close":
             os.close(tui.fd)
         os.kill(tui.pid, signal.SIGHUP)
@@ -111,7 +113,9 @@ def main():
             if s and s["state"] != "Z":
                 name = "relay" if comm.startswith("python") else comm
                 parent = stat(s["ppid"])
-                left[name] = dict(s, parent_same_session=bool(parent and parent["sid"] == s["sid"]))
+                s = dict(s, parent_same_session=bool(parent and parent["sid"] == s["sid"]))
+                s.pop("start")
+                left[name] = s
         row = {"pass": i, "typed": typed, "end": end, "tui opened": bool(opened),
                "processes": sorted("relay" if c.startswith("python") else c for _, c in procs),
                "left after %d s" % AFTER_SECONDS: left,
@@ -119,6 +123,8 @@ def main():
         rows.append(row)
         print(json.dumps(row), flush=True)
         for pid, _ in procs:
+            if (stat(pid) or {}).get("start") != started[pid]:
+                continue  # gone, or the pid now names another process: never signal it
             for sig in (signal.SIGCONT, signal.SIGKILL):
                 try:
                     os.kill(pid, sig)

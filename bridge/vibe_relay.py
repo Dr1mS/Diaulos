@@ -395,6 +395,8 @@ class Relay:
         vibe-rs then ends as with the plain vibe, and the relay follows it (tui_gone)."""
         if bridge.WINDOWS or now - self.resumed_at < RESUME_SECONDS or not orphaned_and_stopped(self.tui_pid):
             return
+        if self.tui_gone():  # checked again just before the signals: never a pid reused after vibe-rs
+            return
         self.resumed_at = now
         log("tui stopped", reason="orphaned after its terminal closed: SIGHUP, SIGCONT")
         for sig in (signal.SIGHUP, signal.SIGCONT):
@@ -428,12 +430,12 @@ class Relay:
                 if now - last < POLL_SECONDS:
                     continue
                 last = now
-                if not self.closing:
-                    self.resume_orphaned_tui(now)
                 if self.tui_gone() and not self.closing:
                     log("tui gone", reason="vibe-rs ended")
                     threading.Thread(target=self.close_server, daemon=True).start()
                     continue
+                if not self.closing:
+                    self.resume_orphaned_tui(now)  # after tui_gone: vibe-rs is still this relay's parent
                 self.from_hook()
                 self.check_timeouts(now)
                 self.write_state()
