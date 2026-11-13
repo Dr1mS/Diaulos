@@ -157,7 +157,7 @@ The receiver answers to the `from` address of the message it got.
 | `ext:<name>` | A program connected with `watch ext:<name>` |
 | `remote:<machine>/<address>` | A session on a paired machine, e.g. `remote:laptop/claude:review` |
 
-`bridge.py` is `~/.agent-bridge/bridge.py`. The MCP tools of Claude Code take the same addresses and options. vibe's `bridge_send` takes the same addresses but no `--workspace`: a `vibe:new` or `agy:new-cli` it starts works in vibe's own directory, an `agy:new` in the relay's workspace.
+`bridge.py` is `~/.agent-bridge/bridge.py`. The MCP tools of Claude Code take the same addresses and options. vibe's `bridge_send` takes the same addresses but no `--workspace`: a `vibe:new` or `agy:new-cli` it starts works in vibe's own directory, an `agy:new` in the relay's workspace. The answer of `send` gives the address it resolved, not the one you typed: `send vibe:docs …` answers `sent <id> … to vibe:8d1107699082`. `list` shows which name goes with which id.
 
 | Command | What it does |
 |---|---|
@@ -320,6 +320,7 @@ Diaulos lets agents act on what they receive. Read this before connecting anythi
 | Symptom | Check |
 |---|---|
 | No channel confirmation screen when `claude` starts | Open a new terminal after installing, and check that you used `--shell` / `-Shell`. |
+| Claude Code's start screen says `server:agent-bridge · no MCP server configured with that name` | Seen when the server is given with `--mcp-config` instead of the installer's setup (user scope). This message comes from Claude Code. If messages arrive, or `bridge.py list` shows the session with `MCP channel`, the channel works: ignore the message. |
 | agy never receives messages | Restart agy after installing. `~/.agent-bridge/state/last_<event>_input.json` is rewritten each time a hook runs. |
 | `list` shows an agy session with `no relay` | Ask agy to run `bridge.py ensure-relay`, and read `~/.agent-bridge/state/relay-<conversationId>.log` (`auto-relay.log` with `--auto-relay`). |
 | A message to an agy CLI conversation with `no process` gets no answer | Read `~/.agent-bridge/state/cli-<conversationId>.log` (`cli-new.log` for `agy:new-cli`). |

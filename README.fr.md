@@ -157,7 +157,7 @@ Le destinataire répond à l'adresse `from` du message qu'il a reçu.
 | `ext:<nom>` | Un programme branché avec `watch ext:<nom>` |
 | `remote:<machine>/<adresse>` | Une session d'une machine appairée, par ex. `remote:laptop/claude:review` |
 
-`bridge.py` désigne `~/.agent-bridge/bridge.py`. Les outils MCP de Claude Code prennent les mêmes adresses et les mêmes options. Le `bridge_send` de vibe prend les mêmes adresses, mais pas `--workspace` : un `vibe:new` ou `agy:new-cli` lancé par vibe travaille dans le dossier de vibe, un `agy:new` dans le workspace du relais.
+`bridge.py` désigne `~/.agent-bridge/bridge.py`. Les outils MCP de Claude Code prennent les mêmes adresses et les mêmes options. Le `bridge_send` de vibe prend les mêmes adresses, mais pas `--workspace` : un `vibe:new` ou `agy:new-cli` lancé par vibe travaille dans le dossier de vibe, un `agy:new` dans le workspace du relais. La réponse de `send` donne l'adresse trouvée, pas celle que vous avez tapée : `send vibe:docs …` répond `sent <id> … to vibe:8d1107699082`. `list` montre quel nom va avec quel id.
 
 | Commande | Effet |
 |---|---|
@@ -320,6 +320,7 @@ Diaulos laisse des agents agir sur ce qu'ils reçoivent. Lisez ceci avant de bra
 | Symptôme | Vérification |
 |---|---|
 | Pas d'écran de confirmation du canal au lancement de `claude` | Ouvrez un nouveau terminal après l'installation, et vérifiez que vous avez utilisé `--shell` / `-Shell`. |
+| L'écran de démarrage de Claude Code affiche `server:agent-bridge · no MCP server configured with that name` | Vu quand le serveur est donné par `--mcp-config` au lieu de la configuration de l'installeur (niveau utilisateur). Ce message vient de Claude Code. Si les messages arrivent, ou si `bridge.py list` montre la session avec `MCP channel`, le canal marche : ignorez le message. |
 | agy ne reçoit jamais rien | Relancez agy après l'installation. Les fichiers `~/.agent-bridge/state/last_<événement>_input.json` sont réécrits à chaque passage d'un hook. |
 | `list` affiche une session agy avec `no relay` | Demandez à agy de lancer `bridge.py ensure-relay`, et lisez `~/.agent-bridge/state/relay-<conversationId>.log` (`auto-relay.log` avec `--auto-relay`). |
 | Un message à une conversation agy CLI marquée `no process` reste sans réponse | Lisez `~/.agent-bridge/state/cli-<conversationId>.log` (`cli-new.log` pour `agy:new-cli`). |
