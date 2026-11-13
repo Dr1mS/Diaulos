@@ -29,9 +29,9 @@ The Diaulos thread:
     session already holds that entry (vibe_runner.recover_inflight).
 
 Signals and ends (§8.9.7): SIGINT is ignored, so Ctrl+C reaches vibe as before. When vibe-rs
-closes its stdin, or vibe-rs is gone (checked every second), the relay closes the real server's
-stdin, waits 5 s, kills it if needed, and exits with its code. When the real server exits, the
-relay exits with its code. When vibe-rs is stopped (state T) and its parent has left its
+closes its stdin, or vibe-rs is gone (checked every 0.5 s, POLL_SECONDS), the relay closes the
+real server's stdin, waits 5 s, kills it if needed, and exits with its code. When the real server
+exits, the relay exits with its code. When vibe-rs is stopped (state T) and its parent has left its
 session, which happens when its terminal closes (T18, orphaned_and_stopped), the relay sends it
 SIGHUP then SIGCONT, as the kernel does for an orphaned process group, so vibe-rs ends.
 
