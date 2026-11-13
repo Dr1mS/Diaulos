@@ -1,5 +1,7 @@
 # Mistral Vibe in Diaulos: tester's report
 
+*Kept as a record: this report tests the first vibe part, built for vibe 2.20 (tool file, TUI internals, `vibe-acp`), which Diaulos no longer supports. The commands it shows, `vibe -p` among them, are those of that version. Diaulos now needs vibe 3: see `VIBE-DESIGN.md` §8.9 and its gates R1 to R9 (§8.9.11), and the README.*
+
 Task T7 of the 2026-11-12 session (milestones J2 and J3). This file holds the test protocol, each run with its command and its output, what works, what breaks, and how it feels to use. It is written by the Tester; it changes no code.
 
 - **Part 1** (this version): protocol, and runs on the committed code, commit `4d214a0` (T5a, T3a, T3b, T3c), with the plugin installed by hand as `docs/VIBE-DESIGN.md` §2 and §5 describe. The installer (T4) and `tests/run-proofs.sh` (T5b) were not delivered yet.
