@@ -57,7 +57,9 @@ class CliTest(BridgeTest):
         runs = self.agy_runs()
         self.assertEqual(len(runs), 1, "two messages sent together must go in one turn")
         self.assertEqual(runs[0], {"cwd": self.spaced, "conversation": OLD, "resume": True, "messages": 2})
-        self.assertIn("delivered", self.state(f"cli-{OLD}.log"))
+        # The answer comes during the agy run; cli-run logs "delivered" once agy has exited.
+        self.assertTrue(wait_for(lambda: "delivered" in (self.state(f"cli-{OLD}.log") or ""), 10),
+                        self.state(f"cli-{OLD}.log"))
         self.assertTrue(wait_for(lambda: self.peer(f"agy:{OLD}").get("relay_pid") is None, 10),
                         "cli-run must step aside when done")
 

@@ -216,6 +216,9 @@ class BridgeVibeTest(VibeSetup):
         self.addCleanup(os.environ.pop, "VIBE_HOME", None)
         self.addCleanup(os.environ.__setitem__, "PATH", os.environ["PATH"])
         os.environ["PATH"] = self.env["PATH"]
+        # vibe:new needs a vibe command: the fake one, not whatever this machine has (CI has none).
+        self.addCleanup(os.environ.pop, "AGENT_BRIDGE_VIBE_REAL", None)
+        os.environ["AGENT_BRIDGE_VIBE_REAL"] = self.env["AGENT_BRIDGE_VIBE_REAL"]
         compacted = "vibe:" + SUFFIX["compacted"]
         self.assertEqual(bridge.resolve(compacted), compacted)
         self.assertEqual(bridge.resolve("vibe:" + SUFFIX["compacted"][:6]), compacted)
