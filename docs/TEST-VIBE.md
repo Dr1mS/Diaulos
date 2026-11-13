@@ -549,3 +549,122 @@ P1, P3, P4: fixed (9.3, 9.4). P5: the T3d measure is under 1 s (9.2). P2, P6, P7
 ## 10. Verdict
 
 On vibe 2.20.0, Linux, Python 3.12: the ten criteria hold, except what this machine cannot show (Python 3.8 and the CI matrix, Windows, a real Claude Code session in a temporary `HOME`). J2: a `send` to `vibe:<name>` wakes an open vibe and it answers (sections 3, 8.3); from vibe, `bridge_send` reaches the `claude` mailbox (run 6, run-proofs step 4), seen with `bridge.py watch claude` and the inbox file, not with a real Claude Code session. J3: the README, followed to the letter in a temporary `HOME`, installs, works and uninstalls cleanly (9.1). Open: two minor problems (P10, P11; P11 is now in the README, commit `3c0c70b`), and the Esc and `!` rows of the README, not run.
+
+## 11. Part 4 (T7b): a real Claude Code session, end to end
+
+Asked by Adrien on 2026-11-13 before J2 and J3 are validated: the same exchanges as above, but with a **real** Claude Code session and its MCP channel, not `bridge.py watch claude` or `mcp_channel.py` alone. Times below are UTC on 2026-11-13 (local time is one hour ahead). Code: commit `9fd5353` (`git archive HEAD`, working tree clean).
+
+### 11.1 Setup
+
+- Bridge and vibe: a new temporary `HOME` (`$H`), same `env -i` setup as section 8.1, `./install.sh` (without `--shell`): `rc=0`, everything under `$H`. `$H/.vibe/config.toml` is the copy used in part 3 (made from a read of the real `~/.vibe/config.toml`, `save_dir` changed; no key in it: the key stays in the keyring). `vibe-limits.json` = `{"max_turns": 4, "max_price": 0.05}`. Model `devstral-small`.
+- Claude: a temporary config dir cannot be used, because Claude Code then asks for a login:
+
+  ```
+  $ CLAUDE_CONFIG_DIR=<temp> claude -p "Reply with the single word PING." --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+  Not logged in · Please run /login
+  ```
+
+  So, by Adrien's choice for this one test session, Claude Code runs with the real `~/.claude` (its login), but every bridge part is temporary. `--strict-mcp-config` with a temporary `--mcp-config` starts `$H/.agent-bridge/mcp_channel.py`, with `AGENT_BRIDGE_HOME=$H/.agent-bridge` and `VIBE_HOME=$H/.vibe`. `--setting-sources project,local` keeps out the user's settings, hooks and plugins, and the working folder is a new, empty temporary one. Command line, started in a pseudo-terminal (`pty_drive.py`), from `env -i` with only `HOME`, `PATH`, `USER`, `LOGNAME`, `TERM`, `LANG`, the D-Bus variables and the two homes:
+
+  ```
+  claude --model haiku --strict-mcp-config --mcp-config <temp>/mcp.json --setting-sources project,local \
+    --allowedTools mcp__agent-bridge__send,mcp__agent-bridge__list_agents \
+    --dangerously-load-development-channels server:agent-bridge
+  ```
+
+- Two screens before the prompt: the folder trust question (default `No, exit`: Down, Enter) and the development channel warning (`1. I am using this for local development`: Enter). Then the welcome screen shows:
+
+  ```
+  ▎ Channels (experimental) messages from server:agent-bridge inject directly in this session · restart without --dangerously-load-development-channels to stop
+  ▎ server:agent-bridge · no MCP server configured with that name
+  ```
+
+  The second line is wrong: the server is configured (by `--mcp-config`) and runs, and the channel works (below). See P12.
+- A vibe TUI (`vibe --trust`) in `$H/work`. Then:
+
+  ```
+  $ bridge.py list
+  claude:cwork-e4  <temp>/cwork  MCP channel: wakes on message
+  vibe:af101e65713d  $H/work  TUI: wakes on message
+  ```
+
+### 11.2 (b) From vibe to the real Claude session
+
+Typed in the vibe TUI at 08:19:30: `Call the bridge_send tool once with to=claude:cwork-e4 and text "B-TEST-1 from vibe. This is a test, do not reply." Then stop.`
+
+```
+vibe screen:       ✓ Success … Message sent. Stopping.
+log.jsonl:         {"id": "e6e99b2bb6df", "from": "vibe:af101e65713d", "to": "claude:cwork-e4", "ts": "2026-11-13T08:19:32+00:00", "body": "B-TEST-1 from vibe. This is a test, do not reply."}
+Claude transcript: 2026-11-13T08:19:33.316Z <channel source="agent-bridge" from="vibe:af101e65713d" msg_id="e6e99b2bb6df" sent_at="2026-11-13T08:19:32+00:00">
+                   B-TEST-1 from vibe. This is a test, do not reply.
+                   </channel>
+Claude screen:     ← agent-bridge: B-TEST-1 from vibe. This is a test, do not reply.
+                   ● The message came in through the agent-bridge channel from "vibe" and says it's a test and not to reply, so I won't respond to it. …
+```
+
+The idle Claude session is woken by the message 1.3 s after `bridge_send`, with nothing typed in Claude. **Pass.**
+
+### 11.3 (a) From the real Claude session to `vibe:<name>`, and the answer back
+
+`/rename t7dvibe` typed in the vibe TUI (`list`: `vibe:af101e65713d  "t7dvibe"  …  TUI: wakes on message`). Typed in Claude at 08:20:13: `Use the agent-bridge send tool once: to=vibe:t7dvibe, text="A-TEST-1: reply to claude:cwork-e4 with bridge_send, text A-PONG-1. Nothing else." When A-PONG-1 arrives, do not reply to it.`
+
+```
+log.jsonl:          {"id": "ac4af44ffb81", "from": "claude:cwork-e4", "to": "vibe:af101e65713d", "ts": "2026-11-13T08:20:16+00:00", "body": "A-TEST-1: reply to claude:cwork-e4 with bridge_send, text A-PONG-1. Nothing else."}
+vibe-plugin.log:    2026-11-13T08:20:16+00:00 pid 869516 delivered ['ac4af44ffb81'] to vibe:af101e65713d
+log.jsonl:          {"id": "8488707ecc77", "from": "vibe:af101e65713d", "to": "claude:cwork-e4", "ts": "2026-11-13T08:20:17+00:00", "body": "A-PONG-1"}
+Claude transcript:  2026-11-13T08:20:19.408Z <channel source="agent-bridge" from="vibe:af101e65713d" msg_id="8488707ecc77" sent_at="2026-11-13T08:20:17+00:00">
+                    A-PONG-1
+                    </channel>
+Claude screen:      ● I sent the message once, but the bridge delivered it to vibe:af101e65713d, not vibe:t7dvibe as you specified. The send result reads sent ac4af44ffb81 from claude:cwork-e4 to vibe:af101e65713d. …
+                    ← agent-bridge: A-PONG-1
+                    ● A-PONG-1 arrived from vibe:af101e65713d. As you asked, I'm not replying to it.
+```
+
+The idle vibe TUI is woken in under 1 s and answers; the answer reaches Claude as a `<channel>` message, 3 s after Claude's send. **Pass.** Small point for the docs: the `send` result gives only the resolved id (`to vibe:af101e65713d`), so Claude first thought the message went to the wrong place (P13).
+
+### 11.4 (c) P1 with a real Claude session: vibe TUI killed during a turn
+
+Sent from the Claude session's own address (it has a reader: the session itself), then `kill -9` of the vibe TUI 4 s after the in-flight record appears; nothing typed afterwards, in Claude or in Diaulos.
+
+```
+$ bridge.py send vibe:t7dvibe 'Run the bash command: sleep 10. After it, reply with bridge_send to claude:cwork-e4, text KILL-C1. Nothing else.' --from claude:cwork-e4
+sent 98439fa103ac to vibe:af101e65713d
+in-flight record at 09:21:07.642 (local); kill -9 at 09:21:11 (local) = 08:21:11 UTC
+vibe-plugin.log:  2026-11-13T08:21:07+00:00 pid 869516 delivered ['98439fa103ac'] to vibe:af101e65713d
+vibe-af101e65713d.log:
+2026-11-13T08:21:37+00:00 vibe-run vibe:af101e65713d pid 872724: max_turns 4, price cap $0.05 (plugin), 3 attempts
+2026-11-13T08:21:53+00:00 delivered ['98439fa103ac'] to vibe:af101e65713d in session 113082e6-90e2-ddd3-f825-af101e65713d with vibe-acp; session_cost $0.0021
+log.jsonl:  {"id": "0987e2c36e55", "from": "vibe:af101e65713d", "to": "claude:cwork-e4", "ts": "2026-11-13T08:21:53+00:00", "body": "KILL-C1"}
+Claude transcript: 2026-11-13T08:21:53.412Z <channel source="agent-bridge" from="vibe:af101e65713d" msg_id="0987e2c36e55" sent_at="2026-11-13T08:21:53+00:00">
+                   KILL-C1
+                   </channel>
+```
+
+`vibe-run` starts 26 s after the kill, and the answer is in the Claude session **42 s after the kill**, under the README's "within about 60 s". **Pass** (P1 fixed, with a real Claude session). My first measuring loop matched `KILL-C1` in the outgoing message itself and printed "1 s"; the times above come from the logs, not from that loop.
+
+### 11.5 What was written in the real `~/.claude`
+
+Compared with a marker file made at 08:18:23, before the test session started, and with a list of `~/.claude` and of the keys of `~/.claude.json` before and after. My own Claude Code session (the Tester's) ran at the same time and writes in the same place, so not every change below comes from the test session.
+
+- From the test session: its transcript `/home/<account>/.claude/projects/<temporary working folder>/` (one `.jsonl` and a `memory` folder); one more project entry in `/home/<account>/.claude.json` (78 projects before, 79 after; the entry holds the trust answer, the allowed tools and the last-session stats); one entry in `/home/<account>/.claude/history.jsonl` (the prompt typed at 08:20:13); four backups `/home/<account>/.claude/backups/.claude.json.backup.<n>`.
+- Not attributable (both sessions refresh these): two new top-level keys of `/home/<account>/.claude.json`, `cachedFeatureFlags` and `cachedFeatureFlagsAt` (I compared the key names, not the values of the other keys); `/home/<account>/.claude/plugins/known_marketplaces.json`, `plugins/plugin-directory-cache-v2.json`, `plugins/store/…`, 729 files under `plugins/marketplaces/`, `cache/changelog.md`, `cache/model-catalog/…`, and `skills/synced/…` (written at 08:22:26, after the test session had stopped).
+- No setting changed: `settings.json` and the MCP servers of the user scope were not touched, and `.credentials.json` was neither copied nor written.
+
+The `history.jsonl` entry and the backups are more than the "transcript and project entry" accepted for this test: Claude Code writes them at every interactive session.
+
+The test session was stopped at 08:22:19 (SIGHUP through `pty_drive.py`); `pgrep` then shows no process of the test (Claude, `mcp_channel.py`, vibe, `vibe-acp`).
+
+### 11.6 Problems found in part 4
+
+| id | Severity | Problem | Steps | Expected | Got |
+|---|---|---|---|---|---|
+| P12 | minor | With `--strict-mcp-config --mcp-config <file>`, Claude Code's welcome screen says the channel's server is not configured, but the channel works. | 11.1 | no warning, or the README says it | `server:agent-bridge · no MCP server configured with that name`. Claude Code's message, not Diaulos'; not seen with the installer's normal user-scope setup (not tried in this part). |
+| P13 | minor | A `send` to `vibe:<name>` answers with the id only. | 11.3 | `sent … to vibe:t7dvibe (vibe:af101e65713d)` or similar | `sent ac4af44ffb81 from claude:cwork-e4 to vibe:af101e65713d`; the Claude model doubted the target |
+
+### 11.7 Cost of part 4
+
+vibe: `vibe-run` 0.0021 $ (its log); three short TUI turns, estimated at about 0.003 $. Part 4 about 0.005 $. **All four parts: about 0.075 $** (cap 0.50; this part's cap 0.30). The Claude session ran on Haiku, on Adrien's Claude account (not counted in the vibe budget).
+
+### 11.8 Verdict of part 4
+
+With a real Claude Code session and its MCP channel: (a) Claude to `vibe:<name>` and the answer back as a `<channel>` message, (b) vibe to the Claude session, which is woken with nothing typed, and (c) a vibe TUI killed during a turn, answered in 42 s with nothing typed. The Claude part of J2 is now shown with a real session, not only with `watch claude`. Open: P12 and P13 (minor), and what section 10 already lists (Esc and `!` rows, Python 3.8, Windows).
