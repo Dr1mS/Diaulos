@@ -222,8 +222,8 @@ Diaulos ships a native vibe plugin, `~/.vibe/plugins/diaulos/`, copied by the in
 | manifest | `plugin.json`, with the `ai.mistral.vibe` extension (`schemaVersion` 1, `toolNamespace` `diaulos`) | names the plugin; without this extension vibe loads none of its hooks (skill 1486) |
 | MCP server | `mcp.json`, starting `~/.agent-bridge/vibe_mcp.py` | the tools `send` and `list_agents` of the server `diaulos` (§8.7: the key was `bridge` before the gates) |
 | `session_start` hook | `ai.mistral.vibe/hooks.toml`, running `~/.agent-bridge/vibe_hook.py` | registers the session as a peer, and tells the model its address |
-| `post_agent` hook | same file | delivers waiting messages when a turn ends, and listens for new ones (§8.3) |
-| `pre_agent` hook | same file | adds messages that waited to the person's next message |
+| `post_agent` hook | same file | ~~delivers waiting messages when a turn ends, and listens for new ones (§8.3)~~ Dropped by §8.9: the relay delivers in the TUI, and `vibe-run` loops instead |
+| `pre_agent` hook | same file | in a TUI without the relay, adds messages that waited to the person's next message; in all cases, shows `⚠ [diaulos:…] message from <sender>` before a delivered turn (§8.9) |
 | skill | `skills/diaulos/SKILL.md` | how to answer, the addresses, the anti-retry rule (§4.1) |
 
 Why a plugin, not lines in the person's `config.toml` and `hooks.toml`: one folder to copy and to remove, nothing merged into the person's files, and no clash with an existing `mcp_servers = []` line (T10b found that one breaks a `[[mcp_servers]]` block). Gate G2 says whether one line of `config.toml` is still needed for the permission.
@@ -236,7 +236,7 @@ Why MCP for the tools, not a skill alone: with a skill, each send is a `bash` ca
 
 | vibe state | 2.20 design | 3.x design |
 |---|---|---|
-| Working | after the turn, by the plugin | after the turn: the `post_agent` hook claims the waiting messages and answers `{"decision": "deny", "reason": <bridge header + messages>}`, which vibe sends to the model as a retry message (probe Q3) |
+| Working | after the turn, by the plugin | **superseded by §8.9** — after the turn: the `post_agent` hook claims the waiting messages and answers `{"decision": "deny", "reason": <bridge header + messages>}`, which vibe sends to the model as a retry message (probe Q3) |
 | Idle after a turn | woken in about 1 s | the same `post_agent` hook keeps listening after the turn ends (a long poll on the inbox, like agy's listening `Stop` hook), and answers as above when a message arrives. The TUI stays usable while it waits (probe Q4: keys echoed 0.21 s later). Gate G1. **Dropped after G1 failed: see §8.7** |
 | Idle before the first message | woken | not woken: no hook runs before the first message. The message waits for the `pre_agent` hook (the person's first message) or for the TUI to close |
 | Closed | `vibe-run` with `vibe-acp` and the plugin's price cap | `vibe-run` with `vibe -p --resume <id> --prompt-file <message> --max-price 0.50 --max-turns <n> --output json`. "Session is already open" is not a failure: the TUI came back, and the message waits for it |
@@ -303,12 +303,12 @@ The Programmer ran G1 to G4 on 2026-11-13 (`tests/vibe3/gates.py`, `gates_tui.py
    - `[tools.diaulos_send]` or `[tools.diaulos_list_agents]` already exists without our markers (TOML refuses a table defined twice).
 
    A project `.vibe/config.toml` can also declare a `diaulos` server; the installer cannot see it. vibe then shows its own warning, and the README says so in Troubleshooting. The uninstaller removes only the marked block. The README and the skill name the tools `send` and `list_agents` of the `diaulos` server; the words `bridge_send` and `bridge_list_agents` go.
-4. **A delivery after a busy turn costs one model call and drops the model's last answer from its memory.** A `post_agent` deny is a "turn revision": vibe marks the answer it just wrote `discarded` (`"cause": "retry"`) and asks again with the reason. The person still sees that answer on screen; the model no longer has it in its context and writes a new one that also handles the message. Tool calls made during the turn stay. The `reason` therefore starts with one line saying so: "Your last answer is still on the person's screen. New Diaulos messages arrived:", then the messages. Not chosen instead: delivering busy-turn messages only with the person's next message (`pre_agent`), which keeps the answer but makes them wait for a person.
+4. **(Superseded by §8.9: the relay queues the message instead, nothing is discarded.)** **A delivery after a busy turn costs one model call and drops the model's last answer from its memory.** A `post_agent` deny is a "turn revision": vibe marks the answer it just wrote `discarded` (`"cause": "retry"`) and asks again with the reason. The person still sees that answer on screen; the model no longer has it in its context and writes a new one that also handles the message. Tool calls made during the turn stay. The `reason` therefore starts with one line saying so: "Your last answer is still on the person's screen. New Diaulos messages arrived:", then the messages. Not chosen instead: delivering busy-turn messages only with the person's next message (`pre_agent`), which keeps the answer but makes them wait for a person.
 5. **Price cap.** `export.json` counts only the last of the calls when a retry discards one (G4: two calls of 8,498 and 8,520 input tokens, `usage.input_tokens` 8,520). Whether `--max-price` counts the discarded calls is not checked. Bound: at most 3 discarded calls per turn (`_MAX_POST_AGENT_RETRIES`), so a background run can end above `--max-price 0.50` by at most 3 calls per turn, `--max-turns` bounding the turns. In `-p` sessions the journal's `tokenUsage` is cumulative over the session (T10c, `10-programmer.md`: 8,581, then 17,209, then 25,957 input tokens), so `vibe-run` logs the cost of its run as the last `tokenUsage` of the run minus the last one before it, priced with the model's prices from the config. Whether that cumulative value includes a discarded call is not known: G6 checks it with `--max-price`. Until then the log line gives the cost and, next to it, the number of `discarded` answers with `"cause": "retry"` in the run ("cost 0.0021 $, 1 discarded call not counted" when G6 shows they are not in `tokenUsage`).
 
 ### 8.8 Receiving while the TUI is idle: Adrien's choice
 
-**Options A and B below were refused by Adrien on 13 Nov.; a native wake is being searched (T12).** This section will be rewritten after T12.
+**Options A and B below were refused by Adrien on 13 Nov.; a native wake is being searched (T12).** T12 found none inside vibe; Adrien chose the relay of §8.9 ("Honnête, on le code", 13 Nov.). This section is kept as the record of the options.
 
 After G1, an open TUI that is idle cannot be woken by a hook. Two options remain. Both keep the rest as in §8.3: after a busy turn (decision 4 above), with the person's next message (`pre_agent`, with a `⚠ [diaulos:…] message from <sender>` line), and in the background once the TUI is closed (`vibe-run`, within about 30 s when a Claude Code session with the channel is open). While a TUI holds the session, `vibe-run` cannot open it ("Session is already open"), so in both options a message to an idle TUI that stays open waits.
 
@@ -326,3 +326,106 @@ After G1, an open TUI that is idle cannot be woken by a hook. Two options remain
 - **G5** (no longer relevant: B was refused) (only if Adrien wants B): in the real TUI, one `cron` schedule of 30 s and a `pre_agent` that denies an empty tick with an empty `system_message`. Count the rows each empty tick adds to the screen, over 5 ticks; check that a non-empty tick runs the messages as its prompt; check that the person's own message typed during a tick is not lost. B is kept only if an empty tick adds no row.
 - **G6** (in T11 in any case): one `vibe -p` run whose `post_agent` discards an answer, with `--max-price` set just above one call: does `--max-price` count the discarded call, and does the cumulative `tokenUsage` of the journal include it?
 - **G7** (first step of T11): the launcher. `./` is relative to the plugin root, and vibe runs the plugin from a copy (`<save_dir>/plugins/packages/<hash>/`). Check that `./vibe-mcp` starts from that copy, that the copy keeps the executable bit, and that the server answers `tools/list`. If the bit is lost, `mcp.json` runs `"command": "sh", "args": ["./vibe-mcp"]` instead (`sh` is a bare executable on `PATH`). On Windows, `./vibe-mcp.cmd` is not tried at all.
+
+### 8.9 The relay in front of `vibe-app-server` (T13)
+
+Status: designed on 2026-11-13 after Adrien's decision ("Honnête, on le code"). It replaces §8.8 and the `post_agent` delivery of §8.3 and §8.7 (decision 4). Evidence: T12 (`T12-vibe-wake/01-programmer.md`, `03-programmer.md`, `10-programmer.md`, review `12-reviewer.md`, the probe `tests/vibe3/relay_app_server.py` and its report `relay-probe/`), and the installed vibe 3.1.2 sources (src). New gates are named **R1** to **R9** (§8.9.8).
+
+#### 8.9.1 What T12 proved
+
+- Inside vibe 3.1.2 only two things start a turn: a request of the client on the stdio of `vibe-app-server`, and a scheduled loop (`cron`, refused). The MCP client ignores notifications, hooks answer turns that already run, a finished background process waits for the next turn, and `send_to_session` needs the `sessionPeers` capability that the TUI does not announce.
+- The TUI (`vibe-rs`) starts the program named by `VIBE_APP_SERVER_BIN` (a path) or `VIBE_APP_SERVER_CMD` (a shell line). A relay put there and passing every line both ways can send its own `session/turn/enqueue`, with a string id: the idle TUI runs the turn 0.09 to 0.19 s later, shows the answer and saves the turn. The relay keeps the answer to its own id. Ids `diaulos-relay-N` never collide with the TUI's integer ids.
+- The question sent by the relay does not show on screen; only the answer does.
+- If the relay dies, the TUI stays open but stops: "App server closed unexpectedly. Press Ctrl+C to exit." The session on disk is intact.
+- The installed `vibe` command (`vibe/cli/launcher.py`) removes any inherited `VIBE_APP_SERVER_*` value and points the TUI at the installed `vibe-app-server`. The relay therefore needs its own command.
+
+Read in the sources for this design (src `app_server/protocol.py`):
+- `TurnEnqueueParams` (line 2700) carries, besides `sessionId` and `entries`, a `sender` (`SessionMessageSender`: `sessionId`, `title`) and a `delivery` (`"start_turn"` or `"queue"`, `PeerDelivery`, line 772). This is how vibe itself hands a message from another session to a client: the client queues it on `session/turn/enqueue` with that `sender` (`SessionPeerSendParams`, lines 3032-3045). vibe then gives the model a header `<session_message from_session_id="…" from_title="…"/>` and marks the entry for display (src `app_server/_session_message.py:45-66`).
+- `"queue"` never starts a turn on an idle session; `"start_turn"` starts one, or reaches the running turn (`TurnEnqueueResponse.waits`, `SessionPeerSendResponse.queued`, lines 2718-2725 and 3048-3055).
+- `hops` counts session messages in a row since a person wrote; the server refuses past `MAX_SESSION_HOPS` (`_session_peers.py:361`). It is vibe's own loop guard.
+
+#### 8.9.2 Parts
+
+| Part | Where | Role |
+|---|---|---|
+| `vibe-diaulos` | `bridge/vibe_diaulos.py`, installed in `~/.agent-bridge/`; started by a shell function (below) | the command that opens the TUI with the relay |
+| relay | `bridge/vibe_relay.py`, installed in `~/.agent-bridge/` | sits between `vibe-rs` and the real `vibe-app-server`, passes every line, delivers Diaulos messages |
+| plugin | `install/vibe-plugin/`, copied to `~/.vibe/plugins/diaulos/` | unchanged from §8.2 and §8.7: MCP tools `send` and `list_agents`, `session_start` and `pre_agent` hooks, skill. No `post_agent` hook any more |
+| `vibe-run` | `bridge/vibe_runner.py` | unchanged for a closed conversation (§8.3), except that later messages start another `vibe -p --resume` run instead of a `post_agent` retry |
+
+#### 8.9.3 The command (point 1)
+
+- **Name and use.** `vibe-diaulos [vibe arguments…]`. Every argument passes to `vibe-rs` unchanged. Non-TUI uses (`-p`, `--prompt-file`, `mcp`, `config`, `help`, `update`, `-v`/`--version`, `-h`/`--help`, `--setup`, `--check-upgrade`) go to the real `vibe` command with no relay, so they behave exactly as before.
+- **How it starts the TUI.** `vibe_diaulos.py` runs with **vibe's own Python** (the interpreter of the `mistral-vibe` tool, read by the installer from the first line of the `vibe` console script on Linux, `<tool>/Scripts/python.exe` on Windows, and stored in `state/vibe-install.json`). It imports `vibe.cli.launcher` and calls `exec_rust_cli(argv, app_server_cmd=[<Diaulos Python>, <~/.agent-bridge/vibe_relay.py>, "--real", <vibe-app-server next to vibe's Python>])`. `exec_rust_cli` has this `app_server_cmd` parameter for exactly this purpose (src `cli/launcher.py:47-58, 90-94`): Diaulos reuses vibe's own choice of binary, its Windows handling and its environment, and copies nothing of it. The real `vibe` command and `launcher.py` are only read, never changed.
+- **Shell function.** `install.sh --shell` already adds a `claude()` function to `~/.bashrc` through `claude-channel.sh`. The same file gets a `vibe()` function: a TUI start runs `vibe-diaulos`, everything listed above runs `command vibe`, and `AGENT_BRIDGE_VIBE_RELAY=0` turns it off for a shell. `install.ps1 -Shell` does the same in the PowerShell profile. Without `--shell`, the person runs `vibe-diaulos` (a small script in `~/.agent-bridge/`, which the README shows with its full path) or adds the alias themselves.
+- **Uninstall.** The uninstallers remove `vibe_diaulos.py`, `vibe_relay.py`, the function (it lives in Diaulos' own sourced file, so nothing else to edit), the plugin folder and the marked `config.toml` block (§8.7). They touch nothing else of vibe.
+- **A TUI opened with the real `vibe`** works without the relay: messages to it wait for the person's next message (`pre_agent`) or for the TUI to close (`vibe-run`). `list` tells the two apart (§8.9.4).
+
+#### 8.9.4 Delivery (point 2)
+
+- **Which session.** The relay reads, without logging them, the `sessionId` of the responses to `session/start`, `session/resume`, `session/fork` and `session/history/clear` (R2 lists the exact methods). It writes `state/vibe-relay/<relay pid>.json`: current session id, `vibe-rs` pid (its parent), relay pid, vibe version, `wake: "relay"`. `vibe_sessions.py` and `list` read it: `vibe:<id>  "<name>"  …  TUI: wakes on message`, or `TUI: no relay, delivers at next message` for a TUI opened with the real `vibe`.
+- **Watching the inbox.** One thread polls the inbox of `vibe:<suffix>` every 0.5 s (as the agy relay does). A message is claimed with the existing claim of `bridge.py`.
+- **Sending.** For each claimed batch, the relay sends one request:
+
+  ```json
+  {"jsonrpc": "2.0", "id": "diaulos-relay-<n>", "method": "session/turn/enqueue",
+   "params": {"sessionId": "<current id>", "idempotencyKey": "<new uuid>",
+              "entries": [{"role": "user", "entryId": "<new id>",
+                           "content": [{"type": "text", "text": "<bridge header + messages>"}]}],
+              "sender": {"sessionId": "diaulos:<from address>", "title": "<from address>"},
+              "delivery": "start_turn"}}
+  ```
+
+  The request is built from the protocol, not copied from a request of the TUI (the probe copied one, with its `entryId`). The exact shape of an entry and of its content blocks is fixed by gate R3.
+- **Idle and busy.** The same request serves both. Idle, it starts a turn. During a turn, vibe either queues it behind the turn (like a message the person sends with Enter, shown "Queued") or lets it reach the running turn, as it does for a message from another session; R4 tells which. Either way nothing is discarded, unlike the `post_agent` retry. The rule of §4.2 ("never in the middle of a turn") becomes "as vibe does for a message from another session".
+- **Answer to the relay's request.** Kept by the relay, never passed to the TUI. A result means delivered: the claim is closed. An error, or no answer within 10 s, puts the messages back in the inbox and is logged by method, id and error code only; after 3 failures in a row the relay stops waking for that session (`wake: "off"` in its state file, shown by `list`), and the messages wait for the person's next message or for `vibe-run`.
+- **Ids.** `diaulos-relay-<n>`, a string, counted by the relay. The TUI uses integers.
+- **Before the first message.** The TUI may open its session before the person types; R2 records when `session/start` comes, and R5 whether an enqueue into a session with no message yet works. If not, the relay waits for the first `session/turn/enqueue` of the TUI before waking.
+- **Loops.** `hops` is left at 1: Diaulos already stops `ext:` loops (§4.1), and each Diaulos message starts at most one turn.
+
+#### 8.9.5 What the person sees (point 3)
+
+- **First choice: vibe's own display of a message from another session.** With `sender` set, vibe marks the entry as a session message (`session_message_display`), and `vibe-rs` has a session-message entry type. Gate R6 checks that the TUI shows it, with the sender's title (`claude:review`, for example) and the text.
+- **Fallback, proven by G3.** The `pre_agent` hook of the plugin recognises the Diaulos header at the start of the prompt and answers `{"system_message": "message from <sender>: <first 120 characters>"}`. The TUI shows `⚠ [diaulos:…] message from claude:review: Can you check…` above the answer. The full text stays in the session and in the model's context.
+- The hook shows nothing for a message the person typed.
+
+#### 8.9.6 The person typing during a delivered turn (point 4)
+
+The person's Enter during a turn sent by the relay is an ordinary `session/turn/enqueue` of the TUI: vibe queues it ("Queued") and runs it after, as with any running turn. Esc interrupts the delivered turn like any other: the messages were delivered (the turn is in the session), so nothing is put back. Gate R7 checks both, and the case where the person's Enter and the relay's request reach `vibe-app-server` in the same instant (each line is written whole under one lock, so lines never mix).
+
+#### 8.9.7 If the relay fails (point 5)
+
+- **Small on purpose.** The forwarding is two loops that copy whole lines between two pipes. Everything Diaulos adds (session tracking, inbox, enqueue) runs in its own thread, inside `try`: an exception there sets `wake: "off"`, is logged, and never stops the forwarding. Only a broken pipe ends the relay.
+- **Signals.** The relay ignores SIGINT, so Ctrl+C in the TUI reaches vibe as before. It ends when `vibe-rs` closes its stdin, after closing the real server's stdin and waiting for it (5 s, then kill), so no `vibe-app-server` is left behind. If the real server exits, the relay exits with its code.
+- **If the relay is killed anyway**, the TUI shows "App server closed unexpectedly. Press Ctrl+C to exit." and accepts nothing more. The session is saved. The person presses Ctrl+C and runs `vibe-diaulos --resume <id>` (or `-c`). The relay's state file then names a dead pid: `list` shows the conversation as closed, and `vibe-run` serves it as soon as the TUI is gone. The README's Troubleshooting gets this row.
+- A message whose enqueue was sent but not answered when the relay died is put back by the next `list` or `send` when the relay's pid is dead and the session has no entry with its `entryId` (same idea as the in-flight record of §4.2).
+
+#### 8.9.8 Log (point 6)
+
+`state/vibe-relay.log`, one JSON line per event, built only from the keys `dir`, `at`, `method`, `id`, `bytes`, `pid`, `argc`, `rc`, `reason`, `session` (the 12-hex suffix), `msgs` (Diaulos message ids) and `wake` (the probe's whitelist of `12-reviewer.md` point 1, plus three Diaulos keys). `method` and `id` are kept only when they are an integer or a string of at most 64 characters. No `params`, `result`, `error` text, message text, account data or path is ever written: the TUI's `account/read` and `identity/read` answers pass through the relay with the person's e-mail and name. The log is rotated at 1 MB. For protocol debugging, the Programmer uses a raw log in a throwaway folder only, never in `~/.agent-bridge`.
+
+#### 8.9.9 Risks and gates (point 7)
+
+Risks:
+- **Private protocol.** `session/turn/enqueue`, `sender`, `delivery` and the `VIBE_APP_SERVER_*` variables are not documented for users; any vibe release may change them. Mitigations: the relay writes the vibe version in its state file; an error answer turns waking off (§8.9.4) without breaking the TUI; `run-proofs.sh` runs the relay gates after each vibe update.
+- **`exec_rust_cli`** is a function of a private module. If it disappears or changes, `vibe-diaulos` falls back to running the real `vibe` with no relay, and says so in one line.
+- **One more process per TUI**, for the whole TUI session, and one more hop for every line. The added delay per line is measured in R1.
+- **Windows: nothing tried.** `vibe-rs.exe`, the quoting of `VIBE_APP_SERVER_CMD` (`shlex.join` is POSIX quoting), the PowerShell function and Ctrl+C handling are all untested.
+- **Account data passes through Diaulos code** (§8.9.8). The relay only parses the few responses that carry a session id.
+
+Gates for the Programmer, in a throwaway `VIBE_HOME`, before or during T14 (each with its proof file):
+- **R1** `vibe-diaulos` through `exec_rust_cli(app_server_cmd=…)` opens the TUI with the relay; `-p`, `mcp`, `--version` and `--help` run without it; the delay the relay adds per line (median of 3 runs of 100 lines).
+- **R2** the methods whose responses carry the current `sessionId` (start, resume, fork, `/clear`), and the state file following them.
+- **R3** a `session/turn/enqueue` built from scratch (new `entryId`, new idempotency key, no TUI template) starts a turn in an idle TUI.
+- **R4** the same request during a running turn: queued behind it, or joining it (`waits`); nothing marked `discarded`.
+- **R5** a request before the TUI's first message.
+- **R6** what the TUI shows for a request with `sender` and `delivery: "start_turn"`: the sender's title and the text, or nothing; if nothing, the `pre_agent` fallback line.
+- **R7** the person's Enter during a delivered turn (queued, then run), Esc during it, and the person's Enter and the relay's request at the same instant (3 passes).
+- **R8** signals: Ctrl+C in the TUI leaves the relay alive; closing the terminal leaves no relay and no `vibe-app-server` process; a killed relay gives the known screen and `list` shows the conversation closed.
+- **R9** the log: after R1 to R8, every line has only whitelisted keys, and a grep by category (e-mail, account name, personal path, message text) gives 0.
+
+#### 8.9.10 Cost
+
+- New: `bridge/vibe_diaulos.py` (about 60 lines), `bridge/vibe_relay.py` (about 250 lines), the `vibe()` functions in `claude-channel.sh` and `claude-channel.ps1`, tests with a fake app-server (a script that answers `session/start` and `session/turn/enqueue`), and the relay probe kept as a proof tool.
+- Removed from the earlier plan: the `post_agent` hook and its retry handling.
+- About one more day of Programmer work on top of T11, plus R1 to R9 (a few cents of devstral-small) and a Tester pass. The README then says how to start vibe for Diaulos, and idle delivery is measured again before any figure is written.
